@@ -496,32 +496,34 @@ export function TextTransfer({
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
             <textarea
               ref={inputRef}
               rows={1}
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => {
+                setInputText(e.target.value);
+                e.target.style.height = '44px';
+                if (e.target.scrollHeight > 44) {
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                  e.target.style.overflowY = 'auto';
+                  e.target.style.borderRadius = 'var(--radius-md)';
+                } else {
+                  e.target.style.overflowY = 'hidden';
+                  e.target.style.borderRadius = 'var(--radius-full)';
+                }
+              }}
               onKeyDown={handleKeyDown}
               onPaste={handleTextareaPaste}
               placeholder={
                 disabled
-                  ? 'Waiting for peer to connect...'
+                  ? 'Waiting for peer...'
                   : destructSec > 0
-                  ? `Type self-destructing message (${destructSec}s)...`
-                  : 'Message, link, or paste image/screenshot...'
+                  ? `Self-destruct note (${destructSec}s)...`
+                  : 'Type a message or drop links...'
               }
               disabled={disabled}
-              className="text-input"
-              style={{
-                resize: 'none',
-                minHeight: '44px',
-                maxHeight: '120px',
-                padding: '10px 14px',
-                borderRadius: 'var(--radius-full)',
-                background: 'rgba(25, 38, 24, 0.6)',
-                flex: 1
-              }}
+              className="chat-composer-textarea"
             />
 
             {/* Voice Note Button */}
@@ -538,7 +540,7 @@ export function TextTransfer({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '1.1rem',
+                fontSize: '1.15rem',
                 flexShrink: 0
               }}
               title="Record and beam a voice note"
@@ -553,10 +555,11 @@ export function TextTransfer({
               disabled={disabled || !inputText.trim() || isOverLimit}
               className="btn btn-primary"
               style={{
-                minWidth: '70px',
+                minWidth: '72px',
                 height: '44px',
                 borderRadius: 'var(--radius-full)',
-                padding: '0 16px',
+                padding: '0 18px',
+                fontSize: '0.88rem',
                 flexShrink: 0
               }}
             >
@@ -565,11 +568,30 @@ export function TextTransfer({
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--color-text-subtle)', padding: '0 4px' }}>
-          <span>Enter to send • Shift+Enter for newline • Paste screenshots anytime</span>
-          <span style={{ color: isOverLimit ? 'var(--color-danger)' : 'inherit' }}>
-            {inputText.length} / {maxLength}
-          </span>
+        {/* Footer Hint Bar */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: '0.72rem',
+            color: 'var(--color-text-subtle)',
+            padding: '2px 8px 0',
+            minHeight: '16px'
+          }}
+        >
+          <span>Enter ↵ to send • Shift+Enter for newline</span>
+          {inputText.length > 0 && (
+            <span
+              style={{
+                color: isOverLimit ? 'var(--color-danger)' : 'var(--color-text-subtle)',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600
+              }}
+            >
+              {inputText.length} / {maxLength}
+            </span>
+          )}
         </div>
       </div>
     </div>

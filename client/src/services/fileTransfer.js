@@ -219,12 +219,15 @@ export class FileTransferManager {
 
     this.activeSends.delete(transferId);
 
+    const senderUrl = typeof window !== 'undefined' && window.URL ? URL.createObjectURL(file) : null;
     this.emit('transferCompleted', {
       transferId,
       fileName: safeName,
       fileSize: file.size,
+      mimeType: file.type || null,
       fileHash,
       verified: true,
+      downloadUrl: senderUrl,
       direction: 'send'
     });
 
