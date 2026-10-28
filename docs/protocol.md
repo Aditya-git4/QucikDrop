@@ -61,6 +61,52 @@ Explicitly requested by the room owner to terminate the session.
 }
 ```
 
+### 1.5 WebRTC Offer (`rtc:offer`)
+Sent by the host to initiate WebRTC negotiation.
+
+```json
+{
+  "type": "rtc:offer",
+  "version": 1,
+  "targetPeerId": "a98471625340192837465019",
+  "payload": {
+    "type": "offer",
+    "sdp": "v=0\r\no=- 123456 ...\r\n"
+  }
+}
+```
+
+### 1.6 WebRTC Answer (`rtc:answer`)
+Sent by the guest in response to an offer.
+
+```json
+{
+  "type": "rtc:answer",
+  "version": 1,
+  "targetPeerId": "c01827384910293847561029",
+  "payload": {
+    "type": "answer",
+    "sdp": "v=0\r\no=- 789012 ...\r\n"
+  }
+}
+```
+
+### 1.7 WebRTC ICE Candidate (`rtc:ice-candidate`)
+Exchanged between peers to discover connection routes.
+
+```json
+{
+  "type": "rtc:ice-candidate",
+  "version": 1,
+  "targetPeerId": "authorized-peer-id",
+  "payload": {
+    "candidate": "candidate:1 1 UDP ...",
+    "sdpMid": "0",
+    "sdpMLineIndex": 0
+  }
+}
+```
+
 ---
 
 ## 2. Server to Client Messages
@@ -186,3 +232,70 @@ Returned when an operation fails.
 | `RATE_LIMITED` | Too many requests within rate limit window |
 | `ROOM_CAPACITY_EXCEEDED` | Server-wide concurrent room limit reached |
 | `INTERNAL_ERROR` | Unexpected internal exception |
+
+---
+
+## 4. WebRTC DataChannel Protocol
+
+Communication over direct peer-to-peer WebRTC DataChannels uses two distinct channels: `control` and `file`.
+
+### 4.1 Control Channel Messages (`control`)
+
+#### A. Direct P2P Chat (`chat`)
+Transmitted directly between peers with zero server transit.
+```json
+{
+  "type": "chat",
+  "clientMessageId": "msg-12345",
+  "text": "Hello directly over WebRTC!",
+  "deviceName": "Windows PC",
+  "sentAt": 1793200123456
+}
+```
+
+#### B. File Start (`file:start`)
+Sent by sender to announce a new incoming file transfer.
+```json
+{
+  "type": "file:start",
+  "transferId": "transfer-abc1234",
+  "fileName": "photo.jpg",
+  "fileSize": 1048576,
+  "mimeType": "image/jpeg",
+  "chunkSize": 16384,
+  "totalChunks": 64
+}
+```
+
+#### C. File Ready Handshake (`file:ready`)
+Sent by receiver acknowledging preparation to receive chunks.
+```json
+{
+  "type": "file:ready",
+  "transferId": "transfer-abc1234"
+}
+```
+
+#### D. File Cancel (`file:cancel`)
+Sent by sender or receiver to terminate an active transfer.
+```json
+{
+  "type": "file:cancel",
+  "transferId": "transfer-abc1234",
+  "reason": "user-cancelled"
+}
+```
+
+#### E. File Complete (`file:complete`)
+Sent by sender when all chunks have been pushed to the channel.
+```json
+{
+  "type": "file:complete",
+  "transferId": "transfer-abc1234"
+}
+```
+
+### 4.2 Binary File Channel (`file`)
+- Transmits raw binary slices of 16 KiB (`16384` bytes) as `ArrayBuffer`.
+- Backpressure: Senders pause when `bufferedAmount > 65536` and resume upon `bufferedamountlow`.
+- Receivers verify exact byte count (`receivedBytes === fileSize`) before reconstructing the `Blob`.

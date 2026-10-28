@@ -4,9 +4,23 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
 
 ---
 
-## 🚀 Milestone 1 Features (Implemented)
-- **Zero Server Storage**: In-memory ephemeral rooms with no database and no file storage.
-- **Cryptographic Security**:
+## 🚀 Milestone 1 & 2 Features (Implemented)
+- **Zero Server File Storage**: Direct peer-to-peer data channels. The signaling server **never** receives or relays file payloads.
+- **Native WebRTC P2P**:
+  - `RTCPeerConnection` with Google public STUN servers.
+  - SDP offer & answer exchange via WebSocket signaling.
+  - ICE candidate signaling with automatic queueing for candidates arriving before remote description.
+- **Dual RTCDataChannels**:
+  - `control` channel: Direct peer-to-peer text chat and file transfer control protocol (`file:start`, `file:ready`, `file:cancel`, `file:complete`).
+  - `file` channel: 16 KiB binary slices (`ArrayBuffer`) with backpressure monitoring (`bufferedAmountLowThreshold`).
+- **File Transfer Queue**:
+  - Drag-and-drop file zone on desktop and file picker on mobile.
+  - Multiple-file queue processed reliably.
+  - Real-time progress bars, percentage, and estimated transfer speed.
+  - Transfer cancellation on sender and receiver with automatic buffer release.
+  - Exact byte count verification before reconstructing `Blob` and generating safe download URLs.
+  - Filename sanitization to prevent path traversal.
+- **Cryptographic Room Security**:
   - 128-bit random Room IDs.
   - 192-bit cryptographic join tokens, stored on the server as SHA-256 hashes.
   - Constant-time token verification (`crypto.timingSafeEqual`).
@@ -14,10 +28,9 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
   - URL fragment-based token transmission (`#token=...`), stripped from the address bar on load to prevent leakages.
 - **Strict 2-Device Limit**: Exactly 1 host and 1 guest per room. 3rd-device attempts are rejected with `ROOM_FULL`.
 - **Instant QR Code Generation**: Scan with an Android phone or mobile browser to connect in seconds.
-- **Bidirectional Text Sharing**: Real-time text exchange over WebSocket with server-verified sender identity stamping.
 - **Automatic Expiration & Teardown**: Configurable idle TTL (10 minutes) with automatic room cleanup and notification.
 - **Owner Closure**: Room owner can close the room at any time; disconnection of either peer closes the room immediately.
-- **Abuse Prevention**: Sliding-window rate limiting on room creation, joins, and message frequency.
+- **Abuse Prevention**: Sliding-window rate limiting on room creation, joins, messaging, and RTC signals.
 - **Origin Validation**: Strict CORS/origin validation in production, with LAN support in development.
 - **Unified Architecture**: Single Express service capable of serving the built React frontend, handling `/health`, and hosting the `/ws` WebSocket endpoint.
 
@@ -43,16 +56,26 @@ quickdrop/
 │   │   │   ├── CopyButton.jsx
 │   │   │   ├── DeviceStatus.jsx
 │   │   │   ├── ErrorMessage.jsx
+│   │   │   ├── FileDropZone.jsx  # Drag & drop and file selection
 │   │   │   ├── QRCodeDisplay.jsx
-│   │   │   └── TextTransfer.jsx
+│   │   │   ├── TextTransfer.jsx  # P2P direct text exchange
+│   │   │   ├── TransferItem.jsx  # File transfer card with Save/Cancel
+│   │   │   ├── TransferProgress.jsx # Progress bar with speed & bytes
+│   │   │   └── TransferQueue.jsx # Multi-file transfer queue
 │   │   ├── hooks/
-│   │   │   └── useSignaling.js   # React hook for signaling lifecycle
+│   │   │   ├── useFileTransfer.js # File queue & progress state
+│   │   │   ├── useSignaling.js   # Signaling lifecycle
+│   │   │   └── useWebRTC.js      # Native RTCPeerConnection & DataChannels
 │   │   ├── pages/
 │   │   │   ├── Home.jsx         # Landing & room creation page
-│   │   │   └── Room.jsx         # Active room & QR display page
+│   │   │   └── Room.jsx         # Active room & P2P sharing page
 │   │   ├── services/
+│   │   │   ├── fileTransfer.js   # 16 KiB chunking, backpressure & assembly
+│   │   │   ├── peerConnection.js # WebRTC connection & candidate queueing
 │   │   │   └── signalingClient.js # WebSocket client service
 │   │   ├── utils/
+│   │   │   ├── fileUtils.js     # Filename sanitization & download trigger
+│   │   │   ├── formatBytes.js   # Byte and speed formatting
 │   │   │   ├── roomUtils.js     # URL parsing & device detection
 │   │   │   └── validateInput.js # Input sanitization & validation
 │   │   ├── App.jsx              # Main application shell

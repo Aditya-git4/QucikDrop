@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { DeviceStatus } from '../components/DeviceStatus.jsx';
 import { QRCodeDisplay } from '../components/QRCodeDisplay.jsx';
 import { TextTransfer } from '../components/TextTransfer.jsx';
+import { FileDropZone } from '../components/FileDropZone.jsx';
+import { TransferQueue } from '../components/TransferQueue.jsx';
 
 /**
- * Active room page handling waiting, connected, and terminated states.
+ * Active room page handling waiting, connected, WebRTC P2P file & text sharing, and terminated states.
  * @param {{
  *   roomId: string,
  *   joinToken: string | null,
@@ -17,7 +19,12 @@ import { TextTransfer } from '../components/TextTransfer.jsx';
  *   onSendMessage: (text: string) => void,
  *   onCloseRoom: () => void,
  *   onReset: () => void,
- *   errorMessage: string | null
+ *   errorMessage: string | null,
+ *   isP2PConnected?: boolean,
+ *   webrtcStatus?: string,
+ *   transfers?: any[],
+ *   onFilesSelected?: (files: FileList) => void,
+ *   onCancelTransfer?: (id: string) => void
  * }} props
  */
 export function Room({
@@ -32,7 +39,12 @@ export function Room({
   onSendMessage,
   onCloseRoom,
   onReset,
-  errorMessage
+  errorMessage,
+  isP2PConnected = false,
+  webrtcStatus = 'disconnected',
+  transfers = [],
+  onFilesSelected = () => {},
+  onCancelTransfer = () => {}
 }) {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
@@ -70,14 +82,22 @@ export function Room({
           </code>
           <span
             className={`badge ${
-              isConnected
+              isP2PConnected
+                ? 'badge-connected'
+                : isConnected
                 ? 'badge-connected'
                 : roomStatus === 'waiting'
                 ? 'badge-waiting'
                 : 'badge-closed'
             }`}
           >
-            {isConnected ? '● Connected' : roomStatus === 'waiting' ? '○ Waiting for Peer' : 'Closed'}
+            {isP2PConnected
+              ? '⚡ P2P Direct'
+              : isConnected
+              ? '● Signaling Connected'
+              : roomStatus === 'waiting'
+              ? '○ Waiting for Peer'
+              : 'Closed'}
           </span>
         </div>
 
@@ -133,6 +153,7 @@ export function Room({
         peerDeviceName={peerDeviceName}
         isOwner={isOwner}
         isConnected={isConnected}
+        isP2PConnected={isP2PConnected}
       />
 
       {/* Terminated State Banner */}
@@ -180,13 +201,29 @@ export function Room({
         </div>
       )}
 
-      {/* Active Connected State: Show Text Sharing Chat */}
-      {(isConnected || (!isTerminated && messages.length > 0)) && (
-        <TextTransfer
-          messages={messages}
-          onSendMessage={onSendMessage}
-          disabled={!isConnected}
-        />
+      {/* Active Room: WebRTC File & Text Sharing */}
+      {isConnected && !isTerminated && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* File Transfer Drop Zone */}
+          <div className="card" style={{ padding: '16px' }}>
+            <FileDropZone
+              onFilesSelected={onFilesSelected}
+              disabled={!isP2PConnected}
+            />
+            {/* Transfer Queue */}
+            <TransferQueue
+              transfers={transfers}
+              onCancelTransfer={onCancelTransfer}
+            />
+          </div>
+
+          {/* Direct P2P Text Chat */}
+          <TextTransfer
+            messages={messages}
+            onSendMessage={onSendMessage}
+            disabled={!isP2PConnected}
+          />
+        </div>
       )}
     </div>
   );

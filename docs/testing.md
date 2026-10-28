@@ -86,15 +86,30 @@ http://192.168.1.15:5000
    - On your PC: The QR code is replaced by the Connected room status, showing "Peer: Android Phone".
    - On your Phone: The room displays "Connected", showing "Host: Windows PC".
 
-### Step 5: Test Bidirectional Text Exchange
-1. On your PC, type `Test from PC` and hit Enter.
-2. Verify that it appears instantly on the Android phone screen.
-3. On your Android phone, tap the "Copy text" button to verify clipboard copy.
-4. On your Android phone, type `Hello from Android!` and tap Send.
-5. Verify that it appears instantly on the PC.
+### Step 5: Verify WebRTC P2P Direct Connection
+1. Once both devices join, observe the status badge updating to `⚡ P2P Direct`.
+2. This indicates that native WebRTC peer connections and RTCDataChannels (`control` and `file`) are open.
 
-### Step 6: Test Security & Closure
+### Step 6: Test P2P Direct Text Sharing
+1. On your PC, type a message (e.g. `Hello P2P from PC!`) and hit Enter.
+2. The message is transmitted **directly peer-to-peer** via WebRTC DataChannel (the signaling server never relays or sees the payload).
+3. Verify that it appears instantly on the Android phone.
+4. On the phone, reply with a text message and verify it appears on the PC.
+
+### Step 7: Test Bidirectional File Transfer
+1. **PC to Phone**:
+   - Drag and drop a file (image, PDF, audio, or document) into the drop zone on your PC (or click to browse).
+   - The file is chunked into 16 KiB slices and transferred with backpressure control.
+   - Observe the live progress bar and speed display on both devices.
+   - On your Android phone, observe the file appear under the Transfer Queue. When complete, tap **Save** to download the file.
+2. **Phone to PC**:
+   - Tap the drop zone on your Android phone to select a photo or document.
+   - Observe the progress bar on both screens.
+   - When complete, click **Save** on your PC to download and open the file.
+3. **Transfer Cancellation**:
+   - Start a transfer and tap **Cancel**.
+   - Verify that the sender stops transmitting, the receiver discards partial chunks, and the status updates to `Cancelled`.
+
+### Step 8: Test Room Closure
 1. On your PC, click **Close Room** and confirm.
-2. Verify that both the PC and the phone transition to the "Room Ended" state.
-3. On the phone, try refreshing the invitation link.
-4. Verify that the server rejects the attempt with `Room not found or no longer active` because the token was consumed and the room was deleted.
+2. Verify that both the PC and the phone cleanly close the WebRTC peer connection and show "Room Ended".

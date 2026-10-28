@@ -1,0 +1,331 @@
+/**
+ * PeerConnectionManager handles the lifecycle of an RTCPeerConnection,
+ * STUN candidate exchange, candidate queueing, and RTCDataChannel management.
+ */
+export class PeerConnectionManager {
+  constructor(options = {}) {
+    this.iceServers = options.iceServers || [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ];
+
+    /** @type {RTCPeerConnection | null} */
+    this.pc = null;
+    /** @type {RTCDataChannel | null} */
+    this.controlChannel = null;
+    /** @type {RTCDataChannel | null} */
+    this.fileChannel = null;
+
+    /** @type {RTCIceCandidateInit[]} */
+    this.iceCandidateQueue = [];
+    this.isRemoteDescriptionSet = false;
+
+    /** @type {Map<string, Set<Function>>} */
+    this.listeners = new Map();
+
+    this.connectionState = 'disconnected';
+    this.bufferedThreshold = 65536; // 64 KiB backpressure limit
+  }
+
+  on(event, handler) {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event).add(handler);
+  }
+
+  off(event, handler) {
+    const handlers = this.listeners.get(event);
+    if (handlers) {
+      handlers.delete(handler);
+    }
+  }
+
+  emit(event, data) {
+    const handlers = this.listeners.get(event);
+    if (handlers) {
+      for (const handler of handlers) {
+        try {
+          handler(data);
+        } catch (err) {
+          console.error(`Error in PeerConnection event [${event}]:`, err);
+        }
+      }
+    }
+  }
+
+  /**
+   * Initialize a new RTCPeerConnection instance.
+   */
+  initPeerConnection() {
+    if (this.pc) {
+      this.close();
+    }
+
+    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.isRemoteDescriptionSet = false;
+    this.iceCandidateQueue = [];
+
+    this.pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.emit('iceCandidate', event.candidate.toJSON());
+      }
+    };
+
+    this.pc.oniceconnectionstatechange = () => {
+      if (!this.pc) return;
+      this.handleStateChange(this.pc.iceConnectionState);
+    };
+
+    this.pc.onconnectionstatechange = () => {
+      if (!this.pc) return;
+      this.handleStateChange(this.pc.connectionState);
+    };
+
+    // When remote peer creates data channels (Answerer side)
+    this.pc.ondatachannel = (event) => {
+      const channel = event.channel;
+      if (channel.label === 'control') {
+        this.setupControlChannel(channel);
+      } else if (channel.label === 'file') {
+        this.setupFileChannel(channel);
+      }
+    };
+  }
+
+  handleStateChange(state) {
+    this.connectionState = state;
+    this.emit('statusChange', state);
+  }
+
+  /**
+   * Set up the control DataChannel for chat and file metadata.
+   * @param {RTCDataChannel} channel
+   */
+  setupControlChannel(channel) {
+    this.controlChannel = channel;
+
+    channel.onopen = () => {
+      this.checkReadyState();
+    };
+
+    channel.onclose = () => {
+      this.emit('statusChange', 'disconnected');
+    };
+
+    channel.onerror = (err) => {
+      this.emit('error', err);
+    };
+
+    channel.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        this.emit('controlMessage', parsed);
+      } catch (err) {
+        console.warn('Received unparseable message on control channel:', err);
+      }
+    };
+  }
+
+  /**
+   * Set up the binary file DataChannel for chunks.
+   * @param {RTCDataChannel} channel
+   */
+  setupFileChannel(channel) {
+    this.fileChannel = channel;
+    this.fileChannel.binaryType = 'arraybuffer';
+    this.fileChannel.bufferedAmountLowThreshold = this.bufferedThreshold;
+
+    channel.onopen = () => {
+      this.checkReadyState();
+    };
+
+    channel.onclose = () => {
+      this.emit('statusChange', 'disconnected');
+    };
+
+    channel.onerror = (err) => {
+      this.emit('error', err);
+    };
+
+    channel.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        this.emit('fileChunk', event.data);
+      }
+    };
+  }
+
+  checkReadyState() {
+    if (
+      this.controlChannel &&
+      this.controlChannel.readyState === 'open' &&
+      this.fileChannel &&
+      this.fileChannel.readyState === 'open'
+    ) {
+      this.emit('ready');
+    }
+  }
+
+  /**
+   * Initiate WebRTC negotiation as Offerer (Host).
+   * Creates data channels and returns offer SDP.
+   * @returns {Promise<RTCSessionDescriptionInit>}
+   */
+  async createOffer() {
+    this.initPeerConnection();
+
+    // Create DataChannels on the Offerer side
+    const control = this.pc.createDataChannel('control', { ordered: true });
+    this.setupControlChannel(control);
+
+    const file = this.pc.createDataChannel('file', { ordered: true });
+    this.setupFileChannel(file);
+
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription(offer);
+
+    return offer;
+  }
+
+  /**
+   * Handle incoming offer and create answer as Answerer (Guest).
+   * @param {RTCSessionDescriptionInit} offer
+   * @returns {Promise<RTCSessionDescriptionInit>}
+   */
+  async handleOffer(offer) {
+    this.initPeerConnection();
+
+    await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    this.isRemoteDescriptionSet = true;
+    await this.drainIceCandidateQueue();
+
+    const answer = await this.pc.createAnswer();
+    await this.pc.setLocalDescription(answer);
+
+    return answer;
+  }
+
+  /**
+   * Handle incoming answer as Offerer.
+   * @param {RTCSessionDescriptionInit} answer
+   */
+  async handleAnswer(answer) {
+    if (!this.pc) return;
+
+    await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+    this.isRemoteDescriptionSet = true;
+    await this.drainIceCandidateQueue();
+  }
+
+  /**
+   * Handle incoming ICE candidate with queueing.
+   * @param {RTCIceCandidateInit} candidate
+   */
+  async addIceCandidate(candidate) {
+    if (!this.pc) return;
+
+    if (!this.isRemoteDescriptionSet || !this.pc.remoteDescription) {
+      this.iceCandidateQueue.push(candidate);
+      return;
+    }
+
+    try {
+      await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (err) {
+      console.warn('Error adding ICE candidate:', err);
+    }
+  }
+
+  /**
+   * Drain queued candidates after remote description is applied.
+   */
+  async drainIceCandidateQueue() {
+    if (!this.pc) return;
+
+    while (this.iceCandidateQueue.length > 0) {
+      const candidate = this.iceCandidateQueue.shift();
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn('Error draining ICE candidate from queue:', err);
+      }
+    }
+  }
+
+  /**
+   * Send JSON payload on control channel.
+   * @param {object} payload
+   */
+  sendControl(payload) {
+    if (!this.controlChannel || this.controlChannel.readyState !== 'open') {
+      throw new Error('WebRTC control channel is not open');
+    }
+    this.controlChannel.send(JSON.stringify(payload));
+  }
+
+  /**
+   * Send binary ArrayBuffer on file channel.
+   * @param {ArrayBuffer} chunk
+   */
+  sendFileChunk(chunk) {
+    if (!this.fileChannel || this.fileChannel.readyState !== 'open') {
+      throw new Error('WebRTC file channel is not open');
+    }
+    this.fileChannel.send(chunk);
+  }
+
+  /**
+   * Backpressure helper: wait until bufferedAmount falls below threshold.
+   * @returns {Promise<void>}
+   */
+  waitForBufferedAmountLow() {
+    if (!this.fileChannel || this.fileChannel.bufferedAmount <= this.bufferedThreshold) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      const onLow = () => {
+        this.fileChannel?.removeEventListener('bufferedamountlow', onLow);
+        resolve();
+      };
+      this.fileChannel.addEventListener('bufferedamountlow', onLow);
+    });
+  }
+
+  /**
+   * Teardown and close all peer connection resources.
+   */
+  close() {
+    if (this.controlChannel) {
+      try {
+        this.controlChannel.close();
+      } catch {
+        // ignore
+      }
+      this.controlChannel = null;
+    }
+
+    if (this.fileChannel) {
+      try {
+        this.fileChannel.close();
+      } catch {
+        // ignore
+      }
+      this.fileChannel = null;
+    }
+
+    if (this.pc) {
+      try {
+        this.pc.close();
+      } catch {
+        // ignore
+      }
+      this.pc = null;
+    }
+
+    this.isRemoteDescriptionSet = false;
+    this.iceCandidateQueue = [];
+    this.connectionState = 'closed';
+    this.emit('statusChange', 'closed');
+  }
+}

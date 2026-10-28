@@ -131,3 +131,49 @@ export function validateTextMessage(msg) {
   }
   return null;
 }
+
+/**
+ * Validate WebRTC signaling message schema (offer, answer, ice-candidate).
+ * @param {any} msg
+ * @param {string} type
+ * @returns {string | null}
+ */
+export function validateRtcMessage(msg, type) {
+  if (!msg.payload || typeof msg.payload !== 'object' || Array.isArray(msg.payload)) {
+    return 'payload must be a valid object';
+  }
+
+  if (type === 'rtc:offer' || type === 'rtc:answer') {
+    if (typeof msg.payload.sdp !== 'string' || !msg.payload.sdp) {
+      return 'payload.sdp must be a non-empty string';
+    }
+    if (msg.payload.sdp.length > 16384) {
+      return 'payload.sdp exceeds maximum length of 16384 characters';
+    }
+    if (msg.payload.type !== undefined && typeof msg.payload.type !== 'string') {
+      return 'payload.type must be a string';
+    }
+    return null;
+  }
+
+  if (type === 'rtc:ice-candidate') {
+    // End of candidates may send empty/null candidate
+    if (msg.payload.candidate !== null && msg.payload.candidate !== undefined) {
+      if (typeof msg.payload.candidate !== 'string') {
+        return 'payload.candidate must be a string or null';
+      }
+      if (msg.payload.candidate.length > 4096) {
+        return 'payload.candidate exceeds maximum length of 4096 characters';
+      }
+    }
+    if (msg.payload.sdpMid !== undefined && msg.payload.sdpMid !== null && typeof msg.payload.sdpMid !== 'string') {
+      return 'payload.sdpMid must be a string or null';
+    }
+    if (msg.payload.sdpMLineIndex !== undefined && msg.payload.sdpMLineIndex !== null && typeof msg.payload.sdpMLineIndex !== 'number') {
+      return 'payload.sdpMLineIndex must be a number or null';
+    }
+    return null;
+  }
+
+  return null;
+}

@@ -72,10 +72,10 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
         }}
       >
         <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-main)' }}>
-          Session Messages ({messages.length})
+          P2P Messages ({messages.length})
         </span>
         <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-          🔒 Stored only in current browser tab
+          🔒 Direct WebRTC P2P (Zero Server Relay)
         </span>
       </div>
 

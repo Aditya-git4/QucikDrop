@@ -224,4 +224,110 @@ describe('Signaling Server Integration', () => {
     assert.equal(res.code, 'INVALID_VERSION');
     ws.close();
   });
+
+  it('correctly relays rtc:offer, rtc:answer, and rtc:ice-candidate between connected peers', async () => {
+    // 1. Peer A connects and creates room
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({
+      type: 'room:create',
+      version: 1,
+      deviceName: 'Device A'
+    }));
+    const createRes = await nextMessage(wsA);
+    const { roomId, joinToken, peerId: peerIdA } = createRes;
+
+    // 2. Peer B joins room
+    const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB.on('open', resolve));
+
+    const peerJoinedPromise = nextMessage(wsA);
+    wsB.send(JSON.stringify({
+      type: 'room:join',
+      version: 1,
+      roomId,
+      joinToken,
+      deviceName: 'Device B'
+    }));
+    const joinRes = await nextMessage(wsB);
+    const { peerId: peerIdB } = joinRes;
+    await peerJoinedPromise;
+
+    // 3. Peer A sends rtc:offer to Peer B
+    const offerPromise = nextMessage(wsB);
+    wsA.send(JSON.stringify({
+      type: 'rtc:offer',
+      version: 1,
+      targetPeerId: peerIdB,
+      payload: {
+        type: 'offer',
+        sdp: 'v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n'
+      }
+    }));
+    const offerRes = await offerPromise;
+    assert.equal(offerRes.type, 'rtc:offer');
+    assert.equal(offerRes.senderPeerId, peerIdA);
+    assert.equal(offerRes.payload.sdp, 'v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n');
+
+    // 4. Peer B sends rtc:answer to Peer A
+    const answerPromise = nextMessage(wsA);
+    wsB.send(JSON.stringify({
+      type: 'rtc:answer',
+      version: 1,
+      targetPeerId: peerIdA,
+      payload: {
+        type: 'answer',
+        sdp: 'v=0\r\no=- 67890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n'
+      }
+    }));
+    const answerRes = await answerPromise;
+    assert.equal(answerRes.type, 'rtc:answer');
+    assert.equal(answerRes.senderPeerId, peerIdB);
+    assert.equal(answerRes.payload.type, 'answer');
+
+    // 5. Peer A sends rtc:ice-candidate
+    const icePromise = nextMessage(wsB);
+    wsA.send(JSON.stringify({
+      type: 'rtc:ice-candidate',
+      version: 1,
+      targetPeerId: peerIdB,
+      payload: {
+        candidate: 'candidate:1 1 UDP 2130706431 192.168.1.1 50000 typ host',
+        sdpMid: '0',
+        sdpMLineIndex: 0
+      }
+    }));
+    const iceRes = await icePromise;
+    assert.equal(iceRes.type, 'rtc:ice-candidate');
+    assert.equal(iceRes.senderPeerId, peerIdA);
+    assert.ok(iceRes.payload.candidate);
+
+    wsA.close();
+    wsB.close();
+  });
+
+  it('rejects rtc signaling messages with invalid payload or target', async () => {
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({
+      type: 'room:create',
+      version: 1,
+      deviceName: 'Device A'
+    }));
+    await nextMessage(wsA);
+
+    // Attempting to send rtc:offer before anyone else joined
+    wsA.send(JSON.stringify({
+      type: 'rtc:offer',
+      version: 1,
+      payload: { sdp: 'fake-sdp' }
+    }));
+    const errRes = await nextMessage(wsA);
+    assert.equal(errRes.type, 'room:error');
+    assert.equal(errRes.code, 'INVALID_ROOM');
+
+    wsA.close();
+  });
 });

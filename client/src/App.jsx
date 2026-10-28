@@ -1,5 +1,7 @@
 import React, { useEffect } from 'react';
 import { useSignaling } from './hooks/useSignaling.js';
+import { useWebRTC } from './hooks/useWebRTC.js';
+import { useFileTransfer } from './hooks/useFileTransfer.js';
 import { Home } from './pages/Home.jsx';
 import { Room } from './pages/Room.jsx';
 import { ConnectionBanner } from './components/ConnectionBanner.jsx';
@@ -8,25 +10,45 @@ import { parseInvitationFromUrl } from './utils/roomUtils.js';
 
 export function App() {
   const {
+    signalingClient,
     connectionStatus,
     roomStatus,
     roomId,
     joinToken,
-    peerId,
     isOwner,
     myDeviceName,
     peerDeviceName,
     expiresAt,
-    messages,
     errorMessage,
     errorCode,
     createRoom,
     joinRoom,
-    sendMessage,
     closeRoom,
     reset,
     setMyDeviceName
   } = useSignaling();
+
+  const {
+    webrtcStatus,
+    isP2PConnected,
+    peerConnection,
+    p2pMessages,
+    sendP2PText
+  } = useWebRTC({
+    signalingClient,
+    isOwner,
+    roomId,
+    myDeviceName,
+    peerDeviceName
+  });
+
+  const {
+    transfers,
+    queueFiles,
+    cancelTransfer
+  } = useFileTransfer({
+    peerConnection
+  });
 
   // Check URL on initial load for invitation link (#token=...)
   useEffect(() => {
@@ -60,7 +82,9 @@ export function App() {
             className="brand-link"
           >
             <span>⚡ QuickDrop</span>
-            <span className="brand-badge">P2P Sharing</span>
+            <span className="brand-badge">
+              {isP2PConnected ? 'WebRTC P2P Direct' : 'Signaling'}
+            </span>
           </a>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -78,16 +102,17 @@ export function App() {
                   width: '6px',
                   height: '6px',
                   borderRadius: '50%',
-                  backgroundColor:
-                    connectionStatus === 'connected'
-                      ? 'var(--color-success)'
-                      : connectionStatus === 'connecting'
-                      ? 'var(--color-warning)'
-                      : 'var(--color-danger)'
+                  backgroundColor: isP2PConnected
+                    ? 'var(--color-success)'
+                    : connectionStatus === 'connected'
+                    ? 'var(--color-warning)'
+                    : 'var(--color-danger)'
                 }}
               />
-              {connectionStatus === 'connected'
-                ? 'Signaling Live'
+              {isP2PConnected
+                ? 'P2P Live'
+                : connectionStatus === 'connected'
+                ? 'Signaling Active'
                 : connectionStatus === 'connecting'
                 ? 'Connecting...'
                 : 'Offline'}
@@ -127,11 +152,16 @@ export function App() {
             myDeviceName={myDeviceName}
             peerDeviceName={peerDeviceName}
             expiresAt={expiresAt}
-            messages={messages}
-            onSendMessage={sendMessage}
+            messages={p2pMessages}
+            onSendMessage={sendP2PText}
             onCloseRoom={closeRoom}
             onReset={handleReset}
             errorMessage={errorMessage}
+            isP2PConnected={isP2PConnected}
+            webrtcStatus={webrtcStatus}
+            transfers={transfers}
+            onFilesSelected={queueFiles}
+            onCancelTransfer={cancelTransfer}
           />
         )}
       </main>
@@ -139,7 +169,7 @@ export function App() {
       {/* Footer */}
       <footer className="app-footer">
         <p>
-          QuickDrop — Temporary Peer-to-Peer Sharing • No permanent server storage • WebRTC Ready
+          QuickDrop — Temporary Peer-to-Peer Sharing • Zero server file storage • Native WebRTC
         </p>
       </footer>
     </div>

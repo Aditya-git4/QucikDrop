@@ -137,6 +137,18 @@ export class SignalingClient {
         this.emit('textAck', message);
         break;
 
+      case 'rtc:offer':
+        this.emit('rtc:offer', message);
+        break;
+
+      case 'rtc:answer':
+        this.emit('rtc:answer', message);
+        break;
+
+      case 'rtc:ice-candidate':
+        this.emit('rtc:ice-candidate', message);
+        break;
+
       case 'room:closed':
         this.emit('roomClosed', message);
         break;

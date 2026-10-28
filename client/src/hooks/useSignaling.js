@@ -203,6 +203,7 @@ export function useSignaling() {
   }, [client]);
 
   return {
+    signalingClient: client,
     connectionStatus,
     roomStatus,
     roomId,

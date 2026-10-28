@@ -6,10 +6,11 @@ import React from 'react';
  *   myDeviceName: string,
  *   peerDeviceName: string | null,
  *   isOwner: boolean,
- *   isConnected: boolean
+ *   isConnected: boolean,
+ *   isP2PConnected?: boolean
  * }} props
  */
-export function DeviceStatus({ myDeviceName, peerDeviceName, isOwner, isConnected }) {
+export function DeviceStatus({ myDeviceName, peerDeviceName, isOwner, isConnected, isP2PConnected = false }) {
   return (
     <div
       style={{
@@ -64,7 +65,7 @@ export function DeviceStatus({ myDeviceName, peerDeviceName, isOwner, isConnecte
             className={`badge ${isConnected ? 'badge-connected' : 'badge-waiting'}`}
             style={{ fontSize: '0.7rem', padding: '2px 6px' }}
           >
-            {isConnected ? 'Connected' : 'Waiting...'}
+            {isP2PConnected ? '⚡ P2P Direct' : isConnected ? 'Connected' : 'Waiting...'}
           </span>
         </div>
         <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)' }}>

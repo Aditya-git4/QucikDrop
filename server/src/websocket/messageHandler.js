@@ -5,7 +5,8 @@ import {
   parseAndValidateRawMessage,
   validateCreateRoom,
   validateJoinRoom,
-  validateTextMessage
+  validateTextMessage,
+  validateRtcMessage
 } from './messageSchemas.js';
 
 /**
@@ -199,7 +200,42 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     return;
   }
 
-  // 4. CLOSE ROOM
+  // 4. WEBRTC SIGNALING (offer, answer, ice-candidate)
+  if (type === 'rtc:offer' || type === 'rtc:answer' || type === 'rtc:ice-candidate') {
+    if (!defaultRateLimiter.isAllowed(peerId, 'rtc_signaling', 120, config.rateLimitWindowMs)) {
+      return sendError(ws, ErrorCodes.RATE_LIMITED, 'WebRTC signaling rate limit exceeded.');
+    }
+
+    const schemaError = validateRtcMessage(data, type);
+    if (schemaError) {
+      return sendError(ws, ErrorCodes.INVALID_MESSAGE, schemaError);
+    }
+
+    if (room.status !== 'connected') {
+      return sendError(ws, ErrorCodes.INVALID_ROOM, 'Cannot exchange WebRTC signals until both peers have joined');
+    }
+
+    const otherPeer = roomManager.getOtherPeer(roomId, peerId);
+    if (!otherPeer || !otherPeer.ws) {
+      return sendError(ws, ErrorCodes.INVALID_MESSAGE, 'No remote peer connected to receive WebRTC signals');
+    }
+
+    // Verify targetPeerId if supplied by sender
+    if (data.targetPeerId && data.targetPeerId !== otherPeer.peerId) {
+      return sendError(ws, ErrorCodes.NOT_AUTHORIZED, 'Target peer is not in this room');
+    }
+
+    // Forward SDP / ICE candidate to other peer (do not log sensitive payload in production)
+    sendJson(otherPeer.ws, {
+      type,
+      version: 1,
+      senderPeerId: peerId,
+      payload: data.payload
+    });
+    return;
+  }
+
+  // 5. CLOSE ROOM
   if (type === 'room:close') {
     try {
       const memberPeerIds = roomManager.closeRoom(roomId, peerId, 'closed_by_owner');
