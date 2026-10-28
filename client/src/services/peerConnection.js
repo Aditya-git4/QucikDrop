@@ -444,6 +444,44 @@ export class PeerConnectionManager {
   }
 
   /**
+   * Wait until all queued bytes in fileChannel have been completely drained (bufferedAmount === 0).
+   * @returns {Promise<void>}
+   */
+  waitForFileChannelDrained() {
+    if (!this.fileChannel || this.fileChannel.bufferedAmount === 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      let timer = null;
+      const cleanup = () => {
+        if (timer) clearInterval(timer);
+        try {
+          this.fileChannel?.removeEventListener('bufferedamountlow', onLow);
+        } catch {
+          // ignore
+        }
+      };
+
+      const onLow = () => {
+        if (!this.fileChannel || this.fileChannel.bufferedAmount === 0) {
+          cleanup();
+          resolve();
+        }
+      };
+
+      timer = setInterval(() => {
+        if (!this.fileChannel || this.fileChannel.bufferedAmount === 0) {
+          cleanup();
+          resolve();
+        }
+      }, 10);
+
+      this.fileChannel.addEventListener('bufferedamountlow', onLow);
+    });
+  }
+
+  /**
    * Teardown and close all peer connection resources.
    */
   close() {

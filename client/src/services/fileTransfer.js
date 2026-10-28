@@ -196,10 +196,19 @@ export class FileTransferManager {
       }
     }
 
-    // 4. Compute final verified SHA-256 hash
+    // 4. Drain all buffered file chunks before sending completion manifest
+    if (
+      this.peerConnection.fileChannel &&
+      this.peerConnection.fileChannel.bufferedAmount > 0 &&
+      typeof this.peerConnection.waitForFileChannelDrained === 'function'
+    ) {
+      await this.peerConnection.waitForFileChannelDrained();
+    }
+
+    // 5. Compute final verified SHA-256 hash
     const fileHash = hasher.digest();
 
-    // 5. Send completion manifest with cryptographic hash
+    // 6. Send completion manifest with cryptographic hash
     this.peerConnection.sendControl({
       type: 'file:complete',
       transferId,
@@ -302,17 +311,58 @@ export class FileTransferManager {
       speed,
       direction: 'receive'
     });
+
+    // If file:complete has already arrived and we just received the final chunk:
+    if (
+      this.currentReceive.pendingCompletion &&
+      this.currentReceive.receivedBytes >= this.currentReceive.fileSize
+    ) {
+      if (this.currentReceive.completionTimeout) {
+        clearTimeout(this.currentReceive.completionTimeout);
+        this.currentReceive.completionTimeout = null;
+      }
+      this.doFinalizeReceive();
+    }
   }
 
   /**
    * Finalize and cryptographically verify the received file.
+   * If completion signal arrives while final chunks are still in transit on the file channel,
+   * waits gracefully for the remaining bytes rather than failing prematurely.
    * @param {string} transferId
    * @param {string} expectedFileHash
    */
   finalizeReceive(transferId, expectedFileHash) {
     if (!this.currentReceive || this.currentReceive.transferId !== transferId) return;
 
-    const { fileName, fileSize, mimeType, chunks, blobParts, hasher, receivedBytes } = this.currentReceive;
+    this.currentReceive.pendingCompletion = { expectedFileHash };
+
+    // If all bytes have already arrived, finish immediately
+    if (this.currentReceive.receivedBytes >= this.currentReceive.fileSize) {
+      this.doFinalizeReceive();
+    } else {
+      // If some chunk is still in flight on fileChannel, wait for it with a 5s timeout
+      if (this.currentReceive.completionTimeout) {
+        clearTimeout(this.currentReceive.completionTimeout);
+      }
+      this.currentReceive.completionTimeout = setTimeout(() => {
+        if (this.currentReceive && this.currentReceive.pendingCompletion) {
+          this.doFinalizeReceive();
+        }
+      }, 5000);
+    }
+  }
+
+  /**
+   * Complete the assembly, byte verification, and SHA-256 check.
+   */
+  doFinalizeReceive() {
+    if (!this.currentReceive) return;
+
+    const { fileName, fileSize, mimeType, chunks, blobParts, hasher, receivedBytes, pendingCompletion } =
+      this.currentReceive;
+    const expectedFileHash = pendingCompletion?.expectedFileHash;
+    const transferId = this.currentReceive.transferId;
 
     // 1. Verify exact byte count
     if (receivedBytes !== fileSize) {
@@ -361,6 +411,9 @@ export class FileTransferManager {
 
   cleanupReceive() {
     if (this.currentReceive) {
+      if (this.currentReceive.completionTimeout) {
+        clearTimeout(this.currentReceive.completionTimeout);
+      }
       this.currentReceive.chunks = [];
       this.currentReceive.blobParts = [];
       this.currentReceive = null;
