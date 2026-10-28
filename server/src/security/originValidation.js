@@ -29,9 +29,15 @@ function isLocalOrPrivateNetwork(host) {
  * @param {string | undefined} origin
  * @param {boolean} isProduction
  * @param {string[]} allowedOrigins
+ * @param {string | null} [requestHost=null]
  * @returns {boolean}
  */
-export function isOriginAllowed(origin, isProduction = config.isProduction, allowedOrigins = config.allowedOrigins) {
+export function isOriginAllowed(
+  origin,
+  isProduction = config.isProduction,
+  allowedOrigins = config.allowedOrigins,
+  requestHost = null
+) {
   // If no origin header is provided (e.g. non-browser client or same-origin in some environments):
   if (!origin) {
     return !isProduction; // In production, require Origin header for WebSocket connection
@@ -40,6 +46,13 @@ export function isOriginAllowed(origin, isProduction = config.isProduction, allo
   // Exact match against allowed origins
   if (allowedOrigins.includes(origin)) {
     return true;
+  }
+
+  // Same-origin match against the Host header of this deployed service
+  if (requestHost) {
+    if (origin === `https://${requestHost}` || origin === `http://${requestHost}`) {
+      return true;
+    }
   }
 
   // In development, also permit local LAN origins (e.g. phone on same Wi-Fi)

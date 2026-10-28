@@ -4,7 +4,17 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
 
 ---
 
-## 🚀 Milestone 1, 2 & 3 Features (Implemented)
+## 🚀 Implemented Capabilities (Milestones 1–5)
+- **Single-Origin Cloud Deployment (Milestone 5)**:
+  - Infrastructure-as-code `render.yaml` blueprint for 1-click deployment to Render Free Web Service.
+  - Automatic same-origin host matching: validates the `Host` header for zero-config production WebSocket connections without breaking cross-origin protections.
+  - Single Express service serves compiled React frontend (`client/dist`), `/ws` WebSocket signaling endpoint, and `/health` monitoring endpoint.
+- **Security & Reliability Hardening (Milestone 4)**:
+  - Hard room lifetime cap (`MAX_ROOM_LIFETIME_MS` = 1 hour) preventing indefinitely extended rooms.
+  - Generational room identifiers preventing race conditions and stale cleanup timers.
+  - Zombie connection reaper: active 30s ping/pong heartbeats to clean up abruptly disconnected or backgrounded mobile devices.
+  - Resilient client reconnection with bounded exponential backoff (1s, 2s, 4s).
+  - 0 known security vulnerabilities (`npm audit`).
 - **Zero Server File Storage**: Direct peer-to-peer data channels. The signaling server **never** receives or relays file payloads.
 - **Large-File Reliability & Integrity (Milestone 3)**:
   - **Incremental SHA-256 Verification**: Both sender and receiver compute SHA-256 digests chunk-by-chunk ($O(1)$ memory).
@@ -12,21 +22,21 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
   - **Verified Progress**: Progress bar reaches 100% only after cryptographic verification passes.
   - **Memory Optimization**: Batches 16 KiB chunks into native `Blob` parts every 512 KiB to prevent JS heap exhaustion.
   - **Memory Safeguards**: Enforces `MEMORY_TRANSFER_LIMIT` (200 MB) on mobile/in-memory browsers lacking direct disk streaming.
-- **Native WebRTC P2P**:
+- **Native WebRTC P2P (Milestone 2)**:
   - `RTCPeerConnection` with Google public STUN servers.
   - SDP offer & answer exchange via WebSocket signaling.
   - ICE candidate signaling with automatic queueing for candidates arriving before remote description.
-- **Dual RTCDataChannels**:
+- **Dual RTCDataChannels (Milestone 2)**:
   - `control` channel: Direct peer-to-peer text chat and file transfer control protocol (`file:start`, `file:ready`, `file:cancel`, `file:complete`).
   - `file` channel: 16 KiB binary slices (`ArrayBuffer`) with backpressure monitoring (`bufferedAmountLowThreshold`).
-- **File Transfer Queue**:
+- **File Transfer Queue (Milestone 2 & 3)**:
   - Drag-and-drop file zone on desktop and file picker on mobile.
   - Multiple-file queue processed reliably.
   - Real-time progress bars, percentage, and estimated transfer speed.
   - Transfer cancellation on sender and receiver with automatic buffer release.
   - Exact byte count verification before reconstructing `Blob` and generating safe download URLs.
   - Filename sanitization to prevent path traversal.
-- **Cryptographic Room Security**:
+- **Cryptographic Room Security (Milestone 1)**:
   - 128-bit random Room IDs.
   - 192-bit cryptographic join tokens, stored on the server as SHA-256 hashes.
   - Constant-time token verification (`crypto.timingSafeEqual`).
@@ -38,7 +48,6 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
 - **Owner Closure**: Room owner can close the room at any time; disconnection of either peer closes the room immediately.
 - **Abuse Prevention**: Sliding-window rate limiting on room creation, joins, messaging, and RTC signals.
 - **Origin Validation**: Strict CORS/origin validation in production, with LAN support in development.
-- **Unified Architecture**: Single Express service capable of serving the built React frontend, handling `/health`, and hosting the `/ws` WebSocket endpoint.
 
 ---
 
@@ -217,7 +226,7 @@ To test between a computer and phone on the same Wi-Fi network:
 
 ---
 
-## ⚠️ Current Limitations (Milestone 1 Scope)
-- **Text Only**: Milestone 1 implements bidirectional text sharing via WebSocket signaling. WebRTC peer-to-peer data channels and file transfer will be implemented in Milestone 2.
-- **In-Memory State**: Server restarts invalidate active rooms.
-- **Two Devices Only**: Reconnecting or adding a third device is intentionally rejected. If a connection drops, a new room must be created.
+## ⚠️ Current Scope & Limitations (Milestones 1–5)
+- **STUN Direct Connectivity**: Current WebRTC configuration relies on STUN (direct peer-to-peer connection). Symmetric NAT traversal requiring TURN relay will be introduced in Milestone 6.
+- **In-Memory State**: Ephemeral, zero-database architecture intentionally keeps rooms in server memory. Server restarts or Render Free idle spin-downs (after 15 minutes of inactivity) clear active room states.
+- **Strict Two Devices Per Room**: QuickDrop pairs exactly 2 devices per room. Reconnecting or adding a third device is intentionally rejected. If a connection drops, a new room must be created.

@@ -10,6 +10,17 @@ describe('originValidation', () => {
     assert.equal(isOriginAllowed('http://localhost:5173', true, allowedList), true);
   });
 
+  it('allows same-origin matches using Host header in production', () => {
+    assert.equal(
+      isOriginAllowed('https://quickdrop.onrender.com', true, [], 'quickdrop.onrender.com'),
+      true
+    );
+    assert.equal(
+      isOriginAllowed('https://malicious.com', true, [], 'quickdrop.onrender.com'),
+      false
+    );
+  });
+
   it('rejects disallowed origins in production', () => {
     assert.equal(isOriginAllowed('https://malicious-site.com', true, allowedList), false);
     assert.equal(isOriginAllowed('http://localhost:3000', true, allowedList), false);

@@ -1,0 +1,35 @@
+# Render Blueprint configuration for QuickDrop
+# Deploy directly to Render Free Web Service with 1-click infrastructure-as-code
+services:
+  - type: web
+    name: quickdrop
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ROOM_TTL_MS
+        value: 600000
+      - key: MAX_ROOM_LIFETIME_MS
+        value: 3600000
+      - key: MAX_WS_MESSAGE_BYTES
+        value: 16384
+      - key: MAX_TEXT_LENGTH
+        value: 4096
+      - key: MAX_ROOMS
+        value: 100
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000
+      - key: RATE_LIMIT_MAX_ROOM_CREATES
+        value: 10
+      - key: RATE_LIMIT_MAX_JOINS
+        value: 15
+      - key: RATE_LIMIT_MAX_MESSAGES
+        value: 60
+      - key: RATE_LIMIT_MAX_RTC
+        value: 120

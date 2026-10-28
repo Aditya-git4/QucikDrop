@@ -25,7 +25,8 @@ export function createSignalingServer(httpServer, roomManager) {
     // Validate origin before accepting WebSocket upgrade
     verifyClient: (info, callback) => {
       const origin = info.origin || info.req.headers.origin;
-      const allowed = isOriginAllowed(origin);
+      const host = info.req.headers.host;
+      const allowed = isOriginAllowed(origin, undefined, undefined, host);
       if (!allowed) {
         callback(false, 403, 'Forbidden Origin');
         return;
