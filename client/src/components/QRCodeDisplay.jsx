@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { CopyButton } from './CopyButton.jsx';
+import { hapticTap } from '../utils/soundEffects.js';
 
 /**
- * Modern iOS glassmorphic QR code generator and invitation sharing display.
+ * Modern VisionOS / Apple AirDrop-style radar QR code invitation display.
  * @param {{ roomId: string, joinToken: string, expiresAt: number | null }} props
  */
 export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
@@ -17,7 +18,7 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
     ? `${customOrigin}/room/${encodeURIComponent(roomId)}#token=${encodeURIComponent(joinToken)}`
     : '';
 
-  // Render QR Code to canvas with crisp contrast
+  // Render QR Code with maximum sharpness
   useEffect(() => {
     if (!canvasRef.current || !invitationUrl) return;
 
@@ -26,9 +27,9 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
       invitationUrl,
       {
         width: 220,
-        margin: 2,
+        margin: 1,
         color: {
-          dark: '#121c11',
+          dark: '#0e160d',
           light: '#ffffff'
         },
         errorCorrectionLevel: 'M'
@@ -39,7 +40,7 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
     );
   }, [invitationUrl]);
 
-  // Expiration countdown timer
+  // Expiration countdown
   useEffect(() => {
     if (!expiresAt) return;
 
@@ -60,7 +61,24 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
     return () => clearInterval(interval);
   }, [expiresAt]);
 
-  const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  const isLocalhost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+  const handleShare = async () => {
+    hapticTap();
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: 'Join QuickDrop Room',
+          text: 'Connect with me on QuickDrop for instant, private peer-to-peer sharing:',
+          url: invitationUrl
+        });
+      } catch {
+        // User dismissed
+      }
+    }
+  };
 
   return (
     <div
@@ -69,10 +87,12 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
         flexDirection: 'column',
         alignItems: 'center',
         textAlign: 'center',
-        gap: '20px',
-        padding: '24px 16px'
+        gap: '22px',
+        padding: '28px 16px',
+        position: 'relative'
       }}
     >
+      {/* Top Status & Radar Beacon */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
         <span className="badge badge-waiting">
           <span className="pulse-dot" /> Waiting for peer to scan...
@@ -80,12 +100,12 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
         {timeLeft && (
           <span
             style={{
-              fontSize: '0.8rem',
+              fontSize: '0.78rem',
               fontWeight: 700,
               color: 'var(--color-lime)',
               fontFamily: 'var(--font-mono)',
               background: 'var(--color-lime-dim)',
-              padding: '4px 10px',
+              padding: '3px 10px',
               borderRadius: 'var(--radius-full)',
               border: '1px solid rgba(228, 253, 151, 0.25)'
             }}
@@ -95,80 +115,102 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
         )}
       </div>
 
-      {/* QR Code Container with Specular Glass Frame */}
+      {/* QR Code Frame with Specular Sheen & Floating Depth */}
       <div
         style={{
-          background: 'rgba(255, 255, 255, 0.96)',
+          position: 'relative',
           padding: '16px',
+          background: '#ffffff',
           borderRadius: 'var(--radius-xl)',
-          boxShadow: '0 16px 40px rgba(0, 0, 0, 0.5), 0 0 35px rgba(228, 253, 151, 0.25)',
+          boxShadow: '0 20px 45px rgba(0, 0, 0, 0.6), 0 0 40px rgba(228, 253, 151, 0.22)',
+          border: '3px solid rgba(228, 253, 151, 0.45)',
           display: 'inline-flex',
-          border: '4px solid rgba(228, 253, 151, 0.4)'
+          transition: 'transform 0.3s var(--spring-bounce)'
         }}
       >
-        <canvas ref={canvasRef} style={{ width: '220px', height: '220px', display: 'block', borderRadius: 'var(--radius-md)' }} />
+        <canvas
+          ref={canvasRef}
+          style={{ width: '220px', height: '220px', display: 'block', borderRadius: 'var(--radius-md)' }}
+        />
       </div>
 
+      {/* Action Area & Explanatory Copy */}
       <div style={{ maxWidth: '440px', width: '100%' }}>
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '6px' }}>
+        <h3
+          style={{
+            fontSize: '1.25rem',
+            fontWeight: 800,
+            letterSpacing: '-0.02em',
+            color: 'var(--color-text-main)',
+            marginBottom: '6px'
+          }}
+        >
           Scan to Connect
         </h3>
-        <p style={{ fontSize: '0.88rem', color: 'var(--color-text-muted)', marginBottom: '16px', lineHeight: 1.5 }}>
-          Open your camera on your phone to join this room instantly, or share the private invitation link below.
+        <p
+          style={{
+            fontSize: '0.88rem',
+            color: 'var(--color-text-muted)',
+            marginBottom: '18px',
+            lineHeight: 1.55
+          }}
+        >
+          Point your phone camera at this QR code to join instantly, or share the secure single-use invitation link.
         </p>
 
-        {/* Copy / Share Link Input Group */}
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Link Share Row */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <input
             type="text"
             readOnly
             value={invitationUrl}
             className="text-input"
-            style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)', flex: '1 1 200px', minHeight: '42px', padding: '10px 14px' }}
+            style={{
+              fontSize: '0.82rem',
+              fontFamily: 'var(--font-mono)',
+              flex: 1,
+              minHeight: '42px',
+              padding: '8px 14px'
+            }}
             onFocus={(e) => e.target.select()}
           />
-          <CopyButton text={invitationUrl} label="Copy Link" successLabel="Copied!" className="btn-secondary" />
+          <CopyButton
+            text={invitationUrl}
+            label="Copy"
+            successLabel="Copied!"
+            className="btn-secondary"
+          />
           {typeof navigator !== 'undefined' && typeof navigator.share === 'function' && (
             <button
               type="button"
               className="btn btn-primary"
-              style={{ minHeight: '42px', padding: '8px 16px', fontSize: '0.85rem' }}
-              onClick={async () => {
-                try {
-                  await navigator.share({
-                    title: 'Join QuickDrop Room',
-                    text: 'Connect with me on QuickDrop to transfer text and files peer-to-peer:',
-                    url: invitationUrl
-                  });
-                } catch {
-                  // User dismissed share dialog
-                }
-              }}
+              style={{ minHeight: '42px', padding: '0 16px', fontSize: '0.85rem' }}
+              onClick={handleShare}
             >
-              📲 Share
+              Share
             </button>
           )}
         </div>
 
-        {/* Wi-Fi note for localhost testing */}
+        {/* Wi-Fi Note for Localhost development */}
         {isLocalhost && (
           <div
             style={{
-              marginTop: '16px',
+              marginTop: '18px',
               padding: '12px 16px',
               backgroundColor: 'rgba(228, 253, 151, 0.08)',
               border: '1px solid rgba(228, 253, 151, 0.2)',
               borderRadius: 'var(--radius-md)',
-              fontSize: '0.8rem',
+              fontSize: '0.80rem',
               color: 'var(--color-text-muted)',
               textAlign: 'left',
               lineHeight: 1.5
             }}
           >
-            <strong style={{ color: 'var(--color-lime)' }}>💡 Testing on Phone via Wi-Fi:</strong>
-            <p style={{ marginTop: '4px' }}>
-              Your phone cannot reach <code>localhost</code>. Open this app on your PC using your local IP (e.g. <code>http://192.168.x.x:5000</code>) so your phone camera opens the correct network address!
-            </p>
+            <strong style={{ color: 'var(--color-lime)', display: 'block', marginBottom: '2px' }}>
+              💡 Testing on phone over local Wi-Fi?
+            </strong>
+            Phones cannot connect to <code>localhost</code>. Access this web app via your computer's local Wi-Fi IP address (e.g. <code>http://192.168.1.X:5000</code>).
           </div>
         )}
       </div>

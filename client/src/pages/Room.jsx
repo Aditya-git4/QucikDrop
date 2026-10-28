@@ -147,19 +147,19 @@ export function Room({
   };
 
   return (
-    <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {/* Top Glass Room Header Bar */}
       <div
         className="card"
         style={{
-          padding: '16px 20px',
+          padding: '12px 18px',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: '12px',
-          background: 'rgba(28, 42, 27, 0.55)',
-          border: '1px solid var(--glass-border-highlight)'
+          background: 'var(--glass-surface-1)',
+          border: '1px solid var(--glass-border)'
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
@@ -314,20 +314,26 @@ export function Room({
         </div>
       </div>
 
-      {/* Clipboard Paste Notification Toast */}
+      {/* Floating Clipboard Notification Toast (Zero Layout Shift) */}
       {pasteNotice && (
         <div
           className="animate-entrance"
           style={{
-            padding: '10px 20px',
+            position: 'fixed',
+            top: '72px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 100,
+            padding: '8px 20px',
             background: 'var(--color-lime)',
             color: 'var(--color-lime-text)',
             fontWeight: 800,
             borderRadius: 'var(--radius-full)',
-            boxShadow: '0 8px 25px rgba(228, 253, 151, 0.45)',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5), 0 0 25px rgba(228, 253, 151, 0.45)',
             textAlign: 'center',
-            fontSize: '0.88rem',
-            letterSpacing: '0.01em'
+            fontSize: '0.86rem',
+            letterSpacing: '0.01em',
+            pointerEvents: 'none'
           }}
         >
           📋 {pasteNotice}

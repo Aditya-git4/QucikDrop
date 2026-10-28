@@ -183,10 +183,11 @@ export function TextTransfer({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '460px',
+        height: '100%',
+        minHeight: '520px',
         padding: '0',
         overflow: 'hidden',
-        background: 'rgba(24, 36, 23, 0.65)',
+        background: 'var(--glass-surface-1)',
         boxShadow: 'var(--glass-shadow)'
       }}
     >
@@ -195,7 +196,7 @@ export function TextTransfer({
         style={{
           padding: '14px 20px',
           borderBottom: '1px solid var(--glass-border)',
-          background: 'rgba(17, 26, 16, 0.75)',
+          background: 'var(--glass-surface-2)',
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',
           display: 'flex',
@@ -279,19 +280,59 @@ export function TextTransfer({
               textAlign: 'center',
               color: 'var(--color-text-muted)',
               fontSize: '0.9rem',
-              maxWidth: '300px',
-              padding: '20px'
+              maxWidth: '340px',
+              padding: '24px 16px'
             }}
           >
-            <div style={{ fontSize: '2.5rem', marginBottom: '10px', filter: 'drop-shadow(0 0 12px rgba(228, 253, 151, 0.3))' }}>
-              ⚡
+            <div style={{ fontSize: '2.4rem', marginBottom: '8px', filter: 'drop-shadow(0 0 16px rgba(228, 253, 151, 0.35))' }}>
+              💬
             </div>
-            <p style={{ fontWeight: 700, color: 'var(--color-text-main)', marginBottom: '4px' }}>
-              Direct Chat Ready
+            <p style={{ fontWeight: 800, fontSize: '1.05rem', color: 'var(--color-text-main)', marginBottom: '4px' }}>
+              Direct P2P Chat
             </p>
-            <p style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
-              Share links, text snippets, and notes. Optional auto-destruct timers for passwords and keys.
+            <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', lineHeight: 1.5, marginBottom: '16px' }}>
+              Beamed directly to the peer's device with zero cloud storage.
             </p>
+
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  hapticTap();
+                  setDestructSec(30);
+                  setInputText('Wi-Fi Password: ');
+                  inputRef.current?.focus();
+                }}
+                className="btn btn-secondary"
+                style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.76rem' }}
+              >
+                🔑 Wi-Fi Pass (30s)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  hapticTap();
+                  setInputText('https://');
+                  inputRef.current?.focus();
+                }}
+                className="btn btn-secondary"
+                style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.76rem' }}
+              >
+                🔗 Link
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  hapticTap();
+                  setInputText('Quick note: ');
+                  inputRef.current?.focus();
+                }}
+                className="btn btn-secondary"
+                style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.76rem' }}
+              >
+                📝 Note
+              </button>
+            </div>
           </div>
         ) : (
           visibleMessages.map((msg) => {

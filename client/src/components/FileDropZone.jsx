@@ -3,10 +3,11 @@ import { extractFilesFromDataTransfer } from '../utils/fileUtils.js';
 import { hapticTap } from '../utils/soundEffects.js';
 
 /**
- * Modern iOS glassmorphic drag-and-drop file selection zone with tactile feedback.
- * Supports individual files and recursive directory / folder drops.
+ * Modern VisionOS / iOS glassmorphic drag-and-drop file selection zone.
+ * Supports single files, multi-file drops, recursive folders, and mobile camera quick-shoot.
  * @param {{
  *   onFilesSelected: (files: FileList | File[]) => void,
+ *   onPasteClipboard?: (() => void) | null,
  *   disabled?: boolean
  * }} props
  */
@@ -57,27 +58,30 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
       }}
       style={{
         border: `2px dashed ${
-          isDragOver ? 'var(--color-lime)' : 'rgba(228, 253, 151, 0.25)'
+          isDragOver ? 'var(--color-lime)' : 'rgba(228, 253, 151, 0.24)'
         }`,
         borderRadius: 'var(--radius-lg)',
-        padding: '32px 20px',
+        padding: '28px 20px',
         textAlign: 'center',
         background: isDragOver
-          ? 'rgba(228, 253, 151, 0.16)'
-          : 'rgba(20, 30, 19, 0.55)',
+          ? 'rgba(228, 253, 151, 0.15)'
+          : 'var(--glass-surface-2)',
         backdropFilter: 'blur(20px)',
         WebkitBackdropFilter: 'blur(20px)',
         cursor: disabled ? 'not-allowed' : 'pointer',
         boxShadow: isDragOver ? 'var(--glass-shadow-glow)' : 'var(--glass-shadow-sm)',
         transition: 'all 0.25s var(--spring-bounce)',
-        transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
+        transform: isDragOver ? 'scale(1.015)' : 'scale(1)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
+        justifyContent: 'center',
         gap: '12px',
         opacity: disabled ? 0.5 : 1,
         userSelect: 'none',
-        WebkitUserSelect: 'none'
+        WebkitUserSelect: 'none',
+        flex: '1 1 auto',
+        minHeight: '210px'
       }}
       role="button"
       tabIndex={disabled ? -1 : 0}
@@ -139,13 +143,13 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
       <div>
         <p style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--color-text-main)', marginBottom: '4px' }}>
           {disabled
-            ? 'Connect via WebRTC to share files'
+            ? 'Waiting for peer to establish P2P...'
             : isDragOver
             ? 'Release to Send Files & Folders'
-            : 'Click to Select or Drop Files & Folders'}
+            : 'Drop Files or Click to Browse'}
         </p>
         <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
-          Direct peer-to-peer streaming • Drop whole folders or single files
+          Direct peer-to-peer streaming • Drop whole folders, photos, or documents
         </p>
       </div>
 

@@ -334,7 +334,7 @@ export function Home({ onCreateRoom, onJoinRoom, isConnecting, errorMessage }) {
           display: 'flex',
           gap: '16px',
           alignItems: 'center',
-          background: 'rgba(28, 42, 27, 0.4)'
+          background: 'var(--glass-surface-2)'
         }}
       >
         <span style={{ fontSize: '1.75rem', filter: 'drop-shadow(0 0 10px rgba(228, 253, 151, 0.3))' }}>🛡️</span>

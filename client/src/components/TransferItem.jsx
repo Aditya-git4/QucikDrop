@@ -24,6 +24,17 @@ import { triggerDownload, isImageMime, isVideoMime, isAudioMime } from '../utils
  *   onCancel: (id: string) => void
  * }} props
  */
+function getFileIcon(fileName = '', mimeType = '', isSend = false) {
+  const name = fileName.toLowerCase();
+  if (mimeType.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(name)) return '🖼️';
+  if (mimeType.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(name)) return '🎙️';
+  if (mimeType.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(name)) return '🎬';
+  if (/\.(pdf|doc|docx|txt|md|rtf)$/i.test(name)) return '📄';
+  if (/\.(zip|tar|gz|7z|rar)$/i.test(name)) return '📦';
+  if (/\.(js|jsx|ts|tsx|html|css|json|py|go|rs|c|cpp)$/i.test(name)) return '💻';
+  return isSend ? '📤' : '📥';
+}
+
 export function TransferItem({ transfer, onCancel }) {
   const [showLightbox, setShowLightbox] = useState(false);
 
@@ -43,7 +54,7 @@ export function TransferItem({ transfer, onCancel }) {
         className="card animate-entrance"
         style={{
           padding: '16px',
-          backgroundColor: 'rgba(28, 42, 27, 0.45)',
+          backgroundColor: 'var(--glass-surface-2)',
           border: `1px solid ${
             isError
               ? 'var(--color-danger-border)'
@@ -93,7 +104,7 @@ export function TransferItem({ transfer, onCancel }) {
                   width: '42px',
                   height: '42px',
                   borderRadius: 'var(--radius-sm)',
-                  background: isCompleted ? 'var(--color-lime-dim)' : 'rgba(20, 30, 19, 0.6)',
+                  background: isCompleted ? 'var(--color-lime-dim)' : 'var(--glass-surface-3)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -101,7 +112,7 @@ export function TransferItem({ transfer, onCancel }) {
                   flexShrink: 0
                 }}
               >
-                {isSend ? '📤' : '📥'}
+                {getFileIcon(transfer.fileName, transfer.mimeType || '', isSend)}
               </span>
             )}
 
