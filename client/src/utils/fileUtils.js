@@ -1,3 +1,5 @@
+import JSZip from 'jszip';
+
 /**
  * Sanitize a filename to prevent path traversal, control character injection, or filesystem issues.
  * Preserves the file extension and limits length to 100 characters.
@@ -169,4 +171,120 @@ function readAllEntries(dirReader) {
   }
 
   return new Promise((resolve) => readBatch(resolve));
+}
+
+/**
+ * Extract files from clipboard data event, handling both .files and .items (for screenshot bitmaps).
+ * @param {DataTransfer | null} clipboardData
+ * @returns {File[]}
+ */
+export function extractFilesFromClipboard(clipboardData) {
+  if (!clipboardData) return [];
+  const files = [];
+
+  // Check files collection first
+  if (clipboardData.files && clipboardData.files.length > 0) {
+    for (let i = 0; i < clipboardData.files.length; i++) {
+      files.push(clipboardData.files[i]);
+    }
+  }
+
+  // Fallback to items collection for screenshot images / bitmap transfers
+  if (files.length === 0 && clipboardData.items) {
+    for (let i = 0; i < clipboardData.items.length; i++) {
+      const item = clipboardData.items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile?.();
+        if (file) {
+          files.push(file);
+        }
+      }
+    }
+  }
+
+  return files;
+}
+
+/**
+ * Read device clipboard via navigator.clipboard API (works on modern desktop and mobile browsers).
+ * @returns {Promise<{ files: File[], text: string | null }>}
+ */
+export async function readDeviceClipboard() {
+  const result = { files: [], text: null };
+
+  if (typeof navigator === 'undefined' || !navigator.clipboard) {
+    throw new Error('Clipboard API is not available on this browser or context.');
+  }
+
+  // 1. Try navigator.clipboard.read() to read images or rich blobs
+  if (typeof navigator.clipboard.read === 'function') {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        for (const type of item.types) {
+          if (type.startsWith('image/') || type === 'application/pdf') {
+            const blob = await item.getType(type);
+            const ext = type.split('/')[1]?.replace('+xml', '') || 'png';
+            const file = new File([blob], `clipboard-${Date.now()}.${ext}`, { type });
+            result.files.push(file);
+          }
+        }
+      }
+    } catch {
+      // Permission denied or format not available, fallback to readText
+    }
+  }
+
+  // 2. If no files found, read text
+  if (result.files.length === 0 && typeof navigator.clipboard.readText === 'function') {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        result.text = text.trim();
+      }
+    } catch {
+      // Ignore or fall through
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Bundle multiple completed file transfers into a single ZIP archive and trigger instant download.
+ * @param {Array<{ fileName: string, downloadUrl: string }>} fileList
+ * @param {string} [archiveName]
+ * @param {(percent: number) => void} [onProgress]
+ */
+export async function downloadAllAsZip(
+  fileList,
+  archiveName = `QuickDrop-Archive-${Date.now()}.zip`,
+  onProgress = null
+) {
+  if (!fileList || fileList.length === 0) return;
+
+  const zip = new JSZip();
+
+  for (let i = 0; i < fileList.length; i++) {
+    const item = fileList[i];
+    try {
+      const response = await fetch(item.downloadUrl);
+      const blob = await response.blob();
+      const safeName = sanitizeFileName(item.fileName || `file-${i + 1}`);
+      zip.file(safeName, blob);
+    } catch (err) {
+      console.error(`Failed to pack file "${item.fileName}" into ZIP:`, err);
+    }
+  }
+
+  const zipBlob = await zip.generateAsync(
+    { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+    (metadata) => {
+      if (onProgress && typeof onProgress === 'function') {
+        onProgress(Math.round(metadata.percent));
+      }
+    }
+  );
+
+  triggerDownload(zipBlob, archiveName);
 }

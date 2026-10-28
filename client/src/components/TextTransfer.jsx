@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { CopyButton } from './CopyButton.jsx';
 import { validateMessageText } from '../utils/validateInput.js';
-import { hapticTap } from '../utils/soundEffects.js';
+import { extractFilesFromClipboard } from '../utils/fileUtils.js';
+import { hapticTap, playSendSound } from '../utils/soundEffects.js';
 
 /**
  * Modern iOS glassmorphic text sharing interface with iMessage-style bubbles,
@@ -19,10 +20,20 @@ import { hapticTap } from '../utils/soundEffects.js';
  *   disabled?: boolean
  * }} props
  */
-export function TextTransfer({ messages, onSendMessage, disabled = false }) {
+export function TextTransfer({
+  messages,
+  onSendMessage,
+  onFilesSelected = null,
+  disabled = false
+}) {
   const [inputText, setInputText] = useState('');
   const [destructSec, setDestructSec] = useState(0); // 0 = off, 30 = 30s, 60 = 60s
   const [evaporatedIds, setEvaporatedIds] = useState(new Set());
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordIntervalRef = useRef(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -73,6 +84,92 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  // Intercept image pastes in textarea so screenshot pasting works even when input is focused!
+  const handleTextareaPaste = (e) => {
+    const files = extractFilesFromClipboard(e.clipboardData);
+    if (files.length > 0) {
+      e.preventDefault();
+      hapticTap();
+      playSendSound();
+      if (onFilesSelected) {
+        onFilesSelected(files);
+      }
+    }
+  };
+
+  // Start voice recording
+  const startVoiceRecording = async () => {
+    if (disabled || isRecordingVoice) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.start();
+      setIsRecordingVoice(true);
+      setRecordSeconds(0);
+      hapticTap();
+
+      recordIntervalRef.current = setInterval(() => {
+        setRecordSeconds((sec) => sec + 1);
+      }, 1000);
+    } catch (err) {
+      console.warn('Microphone access denied or unavailable:', err);
+    }
+  };
+
+  // Stop recording and send audio memo as a file
+  const stopAndSendVoiceRecording = () => {
+    if (!mediaRecorderRef.current || !isRecordingVoice) return;
+
+    clearInterval(recordIntervalRef.current);
+    const recorder = mediaRecorderRef.current;
+
+    recorder.onstop = () => {
+      try {
+        recorder.stream?.getTracks().forEach((track) => track.stop());
+      } catch {
+        // ignore
+      }
+      const mime = recorder.mimeType || 'audio/webm';
+      const audioBlob = new Blob(audioChunksRef.current, { type: mime });
+      const ext = mime.includes('mp4') ? 'm4a' : 'webm';
+      const audioFile = new File([audioBlob], `voice-memo-${Date.now()}.${ext}`, { type: mime });
+
+      if (onFilesSelected && audioFile.size > 0) {
+        onFilesSelected([audioFile]);
+      }
+      setIsRecordingVoice(false);
+      setRecordSeconds(0);
+    };
+
+    recorder.stop();
+    hapticTap();
+    playSendSound();
+  };
+
+  // Cancel voice recording without sending
+  const cancelVoiceRecording = () => {
+    if (!mediaRecorderRef.current) return;
+    clearInterval(recordIntervalRef.current);
+    try {
+      mediaRecorderRef.current.stream?.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current.stop();
+    } catch {
+      // ignore
+    }
+    setIsRecordingVoice(false);
+    setRecordSeconds(0);
+    hapticTap();
   };
 
   const remainingChars = maxLength - inputText.length;
@@ -298,44 +395,137 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
           gap: '8px'
         }}
       >
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              disabled
-                ? 'Waiting for peer to connect...'
-                : destructSec > 0
-                ? `Type self-destructing message (${destructSec}s)...`
-                : 'Send message, link, or note...'
-            }
-            disabled={disabled}
-            className="text-input"
+        {isRecordingVoice ? (
+          /* Live Voice Recording Bar */
+          <div
+            className="animate-entrance"
             style={{
-              resize: 'none',
-              minHeight: '44px',
-              maxHeight: '120px',
-              padding: '10px 14px',
-              borderRadius: 'var(--radius-full)',
-              background: 'rgba(25, 38, 24, 0.6)'
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+              padding: '6px 14px',
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              borderRadius: 'var(--radius-full)'
             }}
-          />
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={disabled || !inputText.trim() || isOverLimit}
-            className="btn btn-primary"
-            style={{ minWidth: '76px', height: '44px', borderRadius: 'var(--radius-full)', padding: '0 18px' }}
           >
-            Send
-          </button>
-        </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span
+                style={{
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  background: 'var(--color-danger)',
+                  boxShadow: '0 0 10px rgba(239, 68, 68, 0.8)'
+                }}
+              />
+              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
+                Recording Memo: {Math.floor(recordSeconds / 60)}:{(recordSeconds % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={stopAndSendVoiceRecording}
+                className="btn btn-primary"
+                style={{
+                  minHeight: '34px',
+                  padding: '4px 14px',
+                  fontSize: '0.82rem',
+                  borderRadius: 'var(--radius-full)'
+                }}
+              >
+                ✓ Send Voice
+              </button>
+              <button
+                type="button"
+                onClick={cancelVoiceRecording}
+                className="btn btn-secondary"
+                style={{
+                  minHeight: '34px',
+                  padding: '4px 12px',
+                  fontSize: '0.82rem',
+                  borderRadius: 'var(--radius-full)'
+                }}
+              >
+                ✕ Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handleTextareaPaste}
+              placeholder={
+                disabled
+                  ? 'Waiting for peer to connect...'
+                  : destructSec > 0
+                  ? `Type self-destructing message (${destructSec}s)...`
+                  : 'Message, link, or paste image/screenshot...'
+              }
+              disabled={disabled}
+              className="text-input"
+              style={{
+                resize: 'none',
+                minHeight: '44px',
+                maxHeight: '120px',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-full)',
+                background: 'rgba(25, 38, 24, 0.6)',
+                flex: 1
+              }}
+            />
+
+            {/* Voice Note Button */}
+            <button
+              type="button"
+              onClick={startVoiceRecording}
+              disabled={disabled}
+              className="btn btn-secondary"
+              style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: 'var(--radius-full)',
+                padding: '0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.1rem',
+                flexShrink: 0
+              }}
+              title="Record and beam a voice note"
+              aria-label="Record voice note"
+            >
+              🎙️
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={disabled || !inputText.trim() || isOverLimit}
+              className="btn btn-primary"
+              style={{
+                minWidth: '70px',
+                height: '44px',
+                borderRadius: 'var(--radius-full)',
+                padding: '0 16px',
+                flexShrink: 0
+              }}
+            >
+              Send
+            </button>
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--color-text-subtle)', padding: '0 4px' }}>
-          <span>Enter to send • Shift+Enter for newline</span>
+          <span>Enter to send • Shift+Enter for newline • Paste screenshots anytime</span>
           <span style={{ color: isOverLimit ? 'var(--color-danger)' : 'inherit' }}>
             {inputText.length} / {maxLength}
           </span>

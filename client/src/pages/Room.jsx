@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DeviceStatus } from '../components/DeviceStatus.jsx';
 import { QRCodeDisplay } from '../components/QRCodeDisplay.jsx';
 import { TextTransfer } from '../components/TextTransfer.jsx';
 import { FileDropZone } from '../components/FileDropZone.jsx';
 import { TransferQueue } from '../components/TransferQueue.jsx';
-import { playSendSound, hapticTap, isSoundEnabled, setSoundEnabled } from '../utils/soundEffects.js';
+import { playSendSound, hapticTap, hapticError, isSoundEnabled, setSoundEnabled } from '../utils/soundEffects.js';
+import { extractFilesFromClipboard, readDeviceClipboard } from '../utils/fileUtils.js';
 
 /**
  * Modern iOS glassmorphic Room page handling waiting, connected, WebRTC P2P file & text sharing.
@@ -40,6 +41,7 @@ export function Room({
 
   const [soundActive, setSoundActive] = useState(() => isSoundEnabled());
   const [pasteNotice, setPasteNotice] = useState(null);
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
 
   const toggleSound = () => {
     const next = !soundActive;
@@ -48,39 +50,90 @@ export function Room({
     hapticTap();
   };
 
-  // Global Clipboard Paste (Ctrl+V / Cmd+V)
+  // Handle files pasted from clipboard (from global keyboard or button)
+  const handleClipboardFiles = useCallback((files) => {
+    if (!files || files.length === 0) return;
+    if (!isP2PConnected) {
+      hapticError();
+      setPasteNotice('⚠️ Cannot send: Waiting for peer to establish P2P connection.');
+      setTimeout(() => setPasteNotice(null), 3500);
+      return;
+    }
+
+    hapticTap();
+    playSendSound();
+    onFilesSelected(files);
+    setPasteNotice(`📋 Pasted & queued ${files.length} file(s)`);
+    setTimeout(() => setPasteNotice(null), 3000);
+  }, [isP2PConnected, onFilesSelected]);
+
+  // Handle text pasted from clipboard outside an input
+  const handleClipboardText = useCallback((text) => {
+    if (!text || !text.trim()) return;
+    if (!isP2PConnected) {
+      hapticError();
+      setPasteNotice('⚠️ Cannot send: Waiting for peer to establish P2P connection.');
+      setTimeout(() => setPasteNotice(null), 3500);
+      return;
+    }
+
+    hapticTap();
+    playSendSound();
+    onSendMessage(text.trim());
+    setPasteNotice('📋 Pasted & sent text message');
+    setTimeout(() => setPasteNotice(null), 3000);
+  }, [isP2PConnected, onSendMessage]);
+
+  // 1-Tap Clipboard Button for mobile & desktop
+  const handlePasteFromDeviceClipboard = useCallback(async () => {
+    try {
+      const data = await readDeviceClipboard();
+      if (data.files && data.files.length > 0) {
+        handleClipboardFiles(data.files);
+      } else if (data.text) {
+        handleClipboardText(data.text);
+      } else {
+        setPasteNotice('Clipboard is empty or unsupported format.');
+        setTimeout(() => setPasteNotice(null), 3000);
+      }
+    } catch {
+      setPasteNotice('Clipboard permission denied by browser or unavailable.');
+      setTimeout(() => setPasteNotice(null), 3500);
+    }
+  }, [handleClipboardFiles, handleClipboardText]);
+
+  // Global Keyboard Paste Listener (Ctrl+V / Cmd+V)
   useEffect(() => {
-    if (!isConnected || isTerminated || !isP2PConnected) return;
+    if (isTerminated) return;
 
     const handlePaste = (e) => {
-      // Don't intercept if user is currently typing in an input/textarea
-      const tag = document.activeElement?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
-      const clipboardFiles = e.clipboardData?.files;
-      if (clipboardFiles && clipboardFiles.length > 0) {
+      // 1. Check for files/images (screenshots, copied files)
+      const files = extractFilesFromClipboard(e.clipboardData);
+      if (files.length > 0) {
+        // Files/Screenshots: Always intercept regardless of active element!
         e.preventDefault();
-        hapticTap();
-        playSendSound();
-        onFilesSelected(clipboardFiles);
-        setPasteNotice(`Pasted ${clipboardFiles.length} item(s) from clipboard`);
-        setTimeout(() => setPasteNotice(null), 3000);
+        handleClipboardFiles(files);
         return;
       }
 
+      // 2. If user is currently typing in an input/textarea:
+      // Let the native input receive the text!
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        return;
+      }
+
+      // 3. Text pasted outside inputs: beam it over chat!
       const text = e.clipboardData?.getData('text');
       if (text && text.trim()) {
         e.preventDefault();
-        hapticTap();
-        onSendMessage(text.trim());
-        setPasteNotice('Pasted text message sent');
-        setTimeout(() => setPasteNotice(null), 3000);
+        handleClipboardText(text);
       }
     };
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [isConnected, isTerminated, isP2PConnected, onFilesSelected, onSendMessage]);
+  }, [isTerminated, handleClipboardFiles, handleClipboardText]);
 
   const getHeaderBadgeText = () => {
     if (isP2PConnected) {
@@ -142,19 +195,27 @@ export function Room({
           </span>
 
           {isP2PConnected && connectionStats?.rtt != null && (
-            <span
+            <button
+              type="button"
+              onClick={() => setShowDiagnosticsModal(true)}
               style={{
                 fontSize: '0.78rem',
-                color: 'var(--color-text-muted)',
+                color: 'var(--color-lime)',
                 fontFamily: 'var(--font-mono)',
                 background: 'rgba(228, 253, 151, 0.08)',
-                padding: '2px 8px',
+                padding: '3px 10px',
                 borderRadius: 'var(--radius-full)',
-                border: '1px solid rgba(228, 253, 151, 0.15)'
+                border: '1px solid rgba(228, 253, 151, 0.25)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px'
               }}
+              title="Click to view WebRTC Diagnostics & Network Telemetry"
             >
-              ⚡ {connectionStats.rtt}ms
-            </span>
+              <span>⚡ {connectionStats.rtt}ms</span>
+              <span style={{ fontSize: '0.68rem', opacity: 0.7 }}>ℹ️</span>
+            </button>
           )}
 
           {isWakeLockActive && (
@@ -175,6 +236,24 @@ export function Room({
 
         {/* Room Action Buttons & Sound Toggle */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            type="button"
+            onClick={handlePasteFromDeviceClipboard}
+            className="btn btn-secondary"
+            style={{
+              minHeight: '36px',
+              padding: '6px 12px',
+              fontSize: '0.82rem',
+              borderRadius: 'var(--radius-full)',
+              borderColor: 'rgba(228, 253, 151, 0.3)',
+              color: 'var(--color-lime)'
+            }}
+            title="Paste image, files, or text from device clipboard"
+            aria-label="Paste from clipboard"
+          >
+            📋 Paste
+          </button>
+
           <button
             type="button"
             onClick={toggleSound}
@@ -378,6 +457,7 @@ export function Room({
 
                 <FileDropZone
                   onFilesSelected={onFilesSelected}
+                  onPasteClipboard={handlePasteFromDeviceClipboard}
                   disabled={!isP2PConnected}
                 />
 
@@ -393,11 +473,112 @@ export function Room({
               <TextTransfer
                 messages={messages}
                 onSendMessage={onSendMessage}
+                onFilesSelected={onFilesSelected}
                 disabled={!isP2PConnected}
               />
             </div>
           </div>
         </>
+      )}
+
+      {/* WebRTC P2P Diagnostics Modal */}
+      {showDiagnosticsModal && (
+        <div
+          className="animate-entrance"
+          onClick={() => setShowDiagnosticsModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px'
+          }}
+        >
+          <div
+            className="card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '460px',
+              width: '100%',
+              padding: '24px',
+              background: 'rgba(24, 38, 23, 0.95)',
+              border: '1px solid var(--color-lime-border)',
+              boxShadow: 'var(--glass-shadow-glow)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.2rem' }}>⚡</span>
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-text-main)' }}>
+                  WebRTC Network Telemetry
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDiagnosticsModal(false)}
+                className="btn btn-secondary"
+                style={{ minHeight: '30px', padding: '2px 10px', fontSize: '0.8rem' }}
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>Connection Type:</span>
+                <span style={{ fontWeight: 700, color: 'var(--color-lime)' }}>
+                  {connectionType === 'lan' ? '⚡ LAN Direct (Highest Speed)' : connectionType === 'relay' ? '🔄 TURN Relayed' : '⚡ STUN Direct (P2P NAT)'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>Round-Trip Latency (RTT):</span>
+                <span style={{ fontWeight: 700, color: 'var(--color-text-main)', fontFamily: 'var(--font-mono)' }}>
+                  {connectionStats?.rtt != null ? `${connectionStats.rtt} ms` : 'Measuring...'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>Local Device:</span>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-main)' }}>
+                  {myDeviceName || 'Local Browser'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>Peer Device:</span>
+                <span style={{ fontWeight: 600, color: 'var(--color-text-main)' }}>
+                  {peerDeviceName || 'Connected Peer'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>SCTP Data Channels:</span>
+                <span style={{ fontWeight: 700, color: 'var(--color-lime)' }}>
+                  control: Open • file: Open
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--color-text-muted)' }}>Screen Awake Lock:</span>
+                <span style={{ fontWeight: 600, color: isWakeLockActive ? 'var(--color-lime)' : 'var(--color-text-muted)' }}>
+                  {isWakeLockActive ? 'Active (Prevent Sleep)' : 'Inactive'}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '16px', textAlign: 'center' }}>
+              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-subtle)' }}>
+                Transfers flow direct peer-to-peer via encrypted DTLS/SCTP. Zero intermediate server storage.
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
