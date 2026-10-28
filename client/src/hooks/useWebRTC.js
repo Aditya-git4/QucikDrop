@@ -3,27 +3,46 @@ import { PeerConnectionManager } from '../services/peerConnection.js';
 
 /**
  * useWebRTC manages RTCPeerConnection negotiation, ICE signaling via WebSocket,
- * and direct DataChannel communication.
+ * direct DataChannel communication, and connection type monitoring (STUN direct vs TURN relay).
  * @param {{
  *   signalingClient: import('../services/signalingClient.js').SignalingClient | null,
  *   isOwner: boolean,
  *   roomId: string | null,
  *   myDeviceName: string,
- *   peerDeviceName: string | null
+ *   peerDeviceName: string | null,
+ *   iceServers?: Array<any> | null
  * }} props
  */
-export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peerDeviceName }) {
+export function useWebRTC({
+  signalingClient,
+  isOwner,
+  roomId,
+  myDeviceName,
+  peerDeviceName,
+  iceServers = null
+}) {
   const [webrtcStatus, setWebrtcStatus] = useState('disconnected'); // disconnected, connecting, connected, failed
   const [isP2PConnected, setIsP2PConnected] = useState(false);
+  const [connectionType, setConnectionType] = useState('unknown'); // 'unknown' | 'lan' | 'direct' | 'relay'
+  const [connectionStats, setConnectionStats] = useState(null);
   const [p2pMessages, setP2pMessages] = useState([]);
 
   const pcManagerRef = useRef(null);
 
   if (!pcManagerRef.current) {
-    pcManagerRef.current = new PeerConnectionManager();
+    pcManagerRef.current = new PeerConnectionManager({
+      iceServers: iceServers || undefined
+    });
   }
 
   const pcManager = pcManagerRef.current;
+
+  // Dynamically update ICE servers when received from signaling server
+  useEffect(() => {
+    if (iceServers && pcManager) {
+      pcManager.setIceServers(iceServers);
+    }
+  }, [iceServers, pcManager]);
 
   useEffect(() => {
     if (!signalingClient) return;
@@ -48,9 +67,13 @@ export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peer
       } else if (status === 'failed') {
         setWebrtcStatus('failed');
         setIsP2PConnected(false);
+        setConnectionType('unknown');
+        setConnectionStats(null);
       } else if (status === 'disconnected' || status === 'closed') {
         setWebrtcStatus('disconnected');
         setIsP2PConnected(false);
+        setConnectionType('unknown');
+        setConnectionStats(null);
       }
     };
 
@@ -60,7 +83,19 @@ export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peer
       setIsP2PConnected(true);
     };
 
-    // 4. Incoming P2P chat messages over control DataChannel
+    // 4. Connection type and stats monitoring
+    const handleConnectionType = (type) => {
+      setConnectionType(type);
+    };
+
+    const handleConnectionStats = (stats) => {
+      setConnectionStats(stats);
+      if (stats?.connectionType) {
+        setConnectionType(stats.connectionType);
+      }
+    };
+
+    // 5. Incoming P2P chat messages over control DataChannel
     const handleControlMessage = (msg) => {
       if (msg && msg.type === 'chat') {
         setP2pMessages((prev) => [
@@ -79,6 +114,8 @@ export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peer
     pcManager.on('iceCandidate', handleLocalIceCandidate);
     pcManager.on('statusChange', handleStatusChange);
     pcManager.on('ready', handleReady);
+    pcManager.on('connectionType', handleConnectionType);
+    pcManager.on('connectionStats', handleConnectionStats);
     pcManager.on('controlMessage', handleControlMessage);
 
     // 5. Host initiates offer when Guest joins
@@ -144,6 +181,8 @@ export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peer
       pcManager.off('iceCandidate', handleLocalIceCandidate);
       pcManager.off('statusChange', handleStatusChange);
       pcManager.off('ready', handleReady);
+      pcManager.off('connectionType', handleConnectionType);
+      pcManager.off('connectionStats', handleConnectionStats);
       pcManager.off('controlMessage', handleControlMessage);
 
       signalingClient.off('peerJoined', handlePeerJoined);
@@ -154,6 +193,8 @@ export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peer
       pcManager.close();
       setIsP2PConnected(false);
       setWebrtcStatus('disconnected');
+      setConnectionType('unknown');
+      setConnectionStats(null);
     };
   }, [signalingClient, isOwner, peerDeviceName, pcManager]);
 
@@ -190,6 +231,9 @@ export function useWebRTC({ signalingClient, isOwner, roomId, myDeviceName, peer
   return {
     webrtcStatus,
     isP2PConnected,
+    connectionType,
+    connectionStats,
+    isRelayed: connectionType === 'relay',
     peerConnection: pcManager,
     p2pMessages,
     sendP2PText

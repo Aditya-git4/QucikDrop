@@ -19,6 +19,7 @@ export function App() {
     myDeviceName,
     peerDeviceName,
     expiresAt,
+    iceServers,
     errorMessage,
     errorCode,
     createRoom,
@@ -31,6 +32,8 @@ export function App() {
   const {
     webrtcStatus,
     isP2PConnected,
+    connectionType,
+    connectionStats,
     peerConnection,
     p2pMessages,
     sendP2PText
@@ -39,7 +42,8 @@ export function App() {
     isOwner,
     roomId,
     myDeviceName,
-    peerDeviceName
+    peerDeviceName,
+    iceServers
   });
 
   const {
@@ -83,7 +87,13 @@ export function App() {
           >
             <span>⚡ QuickDrop</span>
             <span className="brand-badge">
-              {isP2PConnected ? 'WebRTC P2P Direct' : 'Signaling'}
+              {isP2PConnected
+                ? connectionType === 'relay'
+                  ? 'WebRTC Relayed (TURN)'
+                  : connectionType === 'lan'
+                  ? 'WebRTC P2P (LAN)'
+                  : 'WebRTC P2P Direct'
+                : 'Signaling'}
             </span>
           </a>
 
@@ -159,6 +169,8 @@ export function App() {
             errorMessage={errorMessage}
             isP2PConnected={isP2PConnected}
             webrtcStatus={webrtcStatus}
+            connectionType={connectionType}
+            connectionStats={connectionStats}
             transfers={transfers}
             onFilesSelected={queueFiles}
             onCancelTransfer={cancelTransfer}

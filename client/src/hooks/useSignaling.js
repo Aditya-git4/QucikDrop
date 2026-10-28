@@ -15,6 +15,7 @@ export function useSignaling() {
   const [messages, setMessages] = useState([]);
   const [errorMessage, setErrorMessage] = useState(null);
   const [errorCode, setErrorCode] = useState(null);
+  const [iceServers, setIceServers] = useState(null);
 
   const clientRef = useRef(null);
 
@@ -46,6 +47,7 @@ export function useSignaling() {
       setPeerId(msg.peerId);
       setIsOwner(true);
       setExpiresAt(msg.expiresAt);
+      setIceServers(msg.iceServers || null);
       setErrorMessage(null);
     };
 
@@ -55,6 +57,7 @@ export function useSignaling() {
       setPeerId(msg.peerId);
       setIsOwner(false);
       setPeerDeviceName(msg.ownerDeviceName || 'Host Device');
+      setIceServers(msg.iceServers || null);
       setErrorMessage(null);
     };
 
@@ -202,6 +205,7 @@ export function useSignaling() {
     setIsOwner(false);
     setPeerDeviceName(null);
     setExpiresAt(null);
+    setIceServers(null);
     setMessages([]);
     setErrorMessage(null);
     setErrorCode(null);
@@ -218,6 +222,7 @@ export function useSignaling() {
     myDeviceName,
     peerDeviceName,
     expiresAt,
+    iceServers,
     messages,
     errorMessage,
     errorCode,

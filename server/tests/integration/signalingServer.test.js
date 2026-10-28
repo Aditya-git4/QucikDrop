@@ -78,6 +78,8 @@ describe('Signaling Server Integration', () => {
     assert.ok(createRes.roomId);
     assert.ok(createRes.joinToken);
     assert.ok(createRes.peerId);
+    assert.ok(Array.isArray(createRes.iceServers));
+    assert.ok(createRes.iceServers.length > 0);
 
     const { roomId, joinToken } = createRes;
 
@@ -98,6 +100,8 @@ describe('Signaling Server Integration', () => {
     const joinRes = await nextMessage(wsB);
     assert.equal(joinRes.type, 'room:joined');
     assert.equal(joinRes.roomId, roomId);
+    assert.ok(Array.isArray(joinRes.iceServers));
+    assert.ok(joinRes.iceServers.length > 0);
     assert.equal(joinRes.peerCount, 2);
     assert.equal(joinRes.ownerDeviceName, 'Windows PC');
 

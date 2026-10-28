@@ -112,7 +112,7 @@ Exchanged between peers to discover connection routes.
 ## 2. Server to Client Messages
 
 ### 2.1 Room Created (`room:created`)
-Sent to the room creator containing the single-use join token.
+Sent to the room creator containing the single-use join token and configured ICE servers.
 
 ```json
 {
@@ -121,12 +121,15 @@ Sent to the room creator containing the single-use join token.
   "roomId": "e98df89b9d3656abf276cd83ba239da1",
   "peerId": "c01827384910293847561029",
   "joinToken": "f784e1b827361a90c4d8123490aeef105432ab870912bcde",
-  "expiresAt": 1793200600000
+  "expiresAt": 1793200600000,
+  "iceServers": [
+    { "urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+  ]
 }
 ```
 
 ### 2.2 Room Joined (`room:joined`)
-Sent to the joiner upon successful token validation.
+Sent to the joiner upon successful token validation, providing authenticated ICE servers.
 
 ```json
 {
@@ -136,7 +139,10 @@ Sent to the joiner upon successful token validation.
   "peerId": "a98471625340192837465019",
   "peerCount": 2,
   "ownerPeerId": "c01827384910293847561029",
-  "ownerDeviceName": "Windows PC"
+  "ownerDeviceName": "Windows PC",
+  "iceServers": [
+    { "urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+  ]
 }
 ```
 

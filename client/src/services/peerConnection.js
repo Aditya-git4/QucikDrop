@@ -1,4 +1,20 @@
 /**
+ * Classify connection type based on local and remote candidate types.
+ * @param {string | undefined} localType
+ * @param {string | undefined} remoteType
+ * @returns {'relay' | 'lan' | 'direct'}
+ */
+export function classifyCandidatePair(localType, remoteType) {
+  if (localType === 'relay' || remoteType === 'relay') {
+    return 'relay';
+  }
+  if (localType === 'host' && remoteType === 'host') {
+    return 'lan';
+  }
+  return 'direct';
+}
+
+/**
  * PeerConnectionManager handles the lifecycle of an RTCPeerConnection,
  * STUN candidate exchange, candidate queueing, and RTCDataChannel management.
  */
@@ -24,6 +40,10 @@ export class PeerConnectionManager {
     this.listeners = new Map();
 
     this.connectionState = 'disconnected';
+    this.connectionType = 'unknown'; // 'unknown' | 'lan' | 'direct' | 'relay'
+    /** @type {object | null} */
+    this.connectionStats = null;
+    this.statsTimer = null;
     this.bufferedThreshold = 65536; // 64 KiB backpressure limit
   }
 
@@ -93,9 +113,37 @@ export class PeerConnectionManager {
     };
   }
 
+  /**
+   * Update the ICE server configuration (STUN/TURN).
+   * @param {Array<{ urls: string | string[], username?: string, credential?: string }>} servers
+   */
+  setIceServers(servers) {
+    if (Array.isArray(servers) && servers.length > 0) {
+      this.iceServers = servers;
+      if (this.pc && typeof this.pc.setConfiguration === 'function') {
+        try {
+          this.pc.setConfiguration({ iceServers: this.iceServers });
+        } catch (err) {
+          console.warn('Could not dynamically update RTCPeerConnection configuration:', err);
+        }
+      }
+    }
+  }
+
   handleStateChange(state) {
     this.connectionState = state;
     this.emit('statusChange', state);
+
+    if (state === 'connected') {
+      this.startStatsPolling();
+      this.updateConnectionStats();
+    } else if (['disconnected', 'failed', 'closed'].includes(state)) {
+      this.stopStatsPolling();
+      this.connectionType = 'unknown';
+      this.connectionStats = null;
+      this.emit('connectionType', 'unknown');
+      this.emit('connectionStats', null);
+    }
   }
 
   /**
@@ -163,6 +211,110 @@ export class PeerConnectionManager {
       this.fileChannel.readyState === 'open'
     ) {
       this.emit('ready');
+      this.startStatsPolling();
+      this.updateConnectionStats();
+    }
+  }
+
+  /**
+   * Periodically poll connection stats while connected.
+   */
+  startStatsPolling() {
+    this.stopStatsPolling();
+    this.statsTimer = setInterval(() => {
+      this.updateConnectionStats();
+    }, 3000);
+  }
+
+  /**
+   * Stop polling connection stats.
+   */
+  stopStatsPolling() {
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = null;
+    }
+  }
+
+  /**
+   * Inspect active WebRTC candidate pairs and determine if the connection is direct or relayed.
+   * @returns {Promise<object | null>}
+   */
+  async updateConnectionStats() {
+    if (!this.pc || typeof this.pc.getStats !== 'function') return null;
+
+    try {
+      const stats = await this.pc.getStats();
+      if (!stats) return null;
+
+      let selectedPair = null;
+
+      // 1. Standard WebRTC: find candidate-pair via transport report
+      for (const report of stats.values()) {
+        if (report.type === 'transport' && report.selectedCandidatePairId) {
+          selectedPair = stats.get(report.selectedCandidatePairId);
+          break;
+        }
+      }
+
+      // 2. Candidate-pair with selected=true or nominated=true with state=succeeded
+      if (!selectedPair) {
+        for (const report of stats.values()) {
+          if (
+            report.type === 'candidate-pair' &&
+            (report.selected === true || (report.nominated === true && report.state === 'succeeded'))
+          ) {
+            selectedPair = report;
+            break;
+          }
+        }
+      }
+
+      // 3. Fallback: any succeeded candidate pair
+      if (!selectedPair) {
+        for (const report of stats.values()) {
+          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+            selectedPair = report;
+            break;
+          }
+        }
+      }
+
+      if (!selectedPair) return null;
+
+      const localCandidate = stats.get(selectedPair.localCandidateId);
+      const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
+
+      const localType = localCandidate?.candidateType || 'unknown';
+      const remoteType = remoteCandidate?.candidateType || 'unknown';
+      const connectionType = classifyCandidatePair(localType, remoteType);
+      const isRelayed = connectionType === 'relay';
+
+      const rtt =
+        typeof selectedPair.currentRoundTripTime === 'number'
+          ? Math.round(selectedPair.currentRoundTripTime * 1000)
+          : typeof selectedPair.roundTripTime === 'number'
+          ? Math.round(selectedPair.roundTripTime * 1000)
+          : null;
+
+      const info = {
+        connectionType, // 'lan' | 'direct' | 'relay'
+        isRelayed,
+        localCandidateType: localType,
+        remoteCandidateType: remoteType,
+        protocol: localCandidate?.protocol || remoteCandidate?.protocol || 'udp',
+        rtt
+      };
+
+      this.connectionType = connectionType;
+      this.connectionStats = info;
+      this.emit('connectionType', connectionType);
+      this.emit('connectionStats', info);
+
+      return info;
+    } catch (err) {
+      console.warn('Could not read WebRTC connection stats:', err);
+      return null;
     }
   }
 
@@ -323,9 +475,14 @@ export class PeerConnectionManager {
       this.pc = null;
     }
 
+    this.stopStatsPolling();
+    this.connectionType = 'unknown';
+    this.connectionStats = null;
     this.isRemoteDescriptionSet = false;
     this.iceCandidateQueue = [];
     this.connectionState = 'closed';
     this.emit('statusChange', 'closed');
+    this.emit('connectionType', 'unknown');
+    this.emit('connectionStats', null);
   }
 }

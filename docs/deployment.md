@@ -36,6 +36,11 @@ Configure these under **Environment Variables** in Render:
 | `ROOM_TTL_MS` | `600000` | Room idle TTL (10 minutes) |
 | `MAX_ROOM_LIFETIME_MS` | `3600000` | Hard cap on room duration (1 hour) |
 | `PORT` | *(Provided by Render automatically)* | Port assigned by the hosting environment |
+| `STUN_URLS` | *(Optional)* | Custom STUN servers (defaults to Google STUN) |
+| `TURN_URLS` | *(Optional)* | Comma-separated TURN relay URLs for NAT traversal |
+| `TURN_SECRET` | *(Optional)* | Shared secret for Coturn/RFC 5766 ephemeral HMAC-SHA1 tokens |
+| `TURN_USERNAME` | *(Optional)* | Static TURN username (if not using ephemeral secrets) |
+| `TURN_CREDENTIAL` | *(Optional)* | Static TURN credential/password |
 
 ---
 

@@ -1,4 +1,5 @@
 import { config } from '../config/config.js';
+import { getIceServers } from '../config/iceServers.js';
 import { defaultRateLimiter } from '../security/rateLimiter.js';
 import {
   ErrorCodes,
@@ -73,6 +74,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
 
     try {
       const { roomId, rawJoinToken, ownerPeerId, expiresAt } = roomManager.createRoom(ws, data.deviceName);
+      const iceServers = getIceServers(ownerPeerId);
 
       // Respond to creator with token (never logged)
       sendJson(ws, {
@@ -81,7 +83,8 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         roomId,
         peerId: ownerPeerId,
         joinToken: rawJoinToken,
-        expiresAt
+        expiresAt,
+        iceServers
       });
     } catch (err) {
       const code = err.code || ErrorCodes.INTERNAL_ERROR;
@@ -112,6 +115,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
       const room = roomManager.getRoom(data.roomId);
       const joinerMember = room ? room.members.get(joinerPeerId) : null;
       const joinerDeviceName = joinerMember ? joinerMember.deviceName : 'Guest';
+      const iceServers = getIceServers(joinerPeerId);
 
       // Respond to the joining peer
       sendJson(ws, {
@@ -121,7 +125,8 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         peerId: joinerPeerId,
         peerCount: 2,
         ownerPeerId,
-        ownerDeviceName
+        ownerDeviceName,
+        iceServers
       });
 
       // Notify the room creator (owner)

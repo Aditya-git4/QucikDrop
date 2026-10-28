@@ -22,6 +22,8 @@ import { TransferQueue } from '../components/TransferQueue.jsx';
  *   errorMessage: string | null,
  *   isP2PConnected?: boolean,
  *   webrtcStatus?: string,
+ *   connectionType?: 'unknown' | 'lan' | 'direct' | 'relay',
+ *   connectionStats?: any,
  *   transfers?: any[],
  *   onFilesSelected?: (files: FileList) => void,
  *   onCancelTransfer?: (id: string) => void
@@ -42,6 +44,8 @@ export function Room({
   errorMessage,
   isP2PConnected = false,
   webrtcStatus = 'disconnected',
+  connectionType = 'unknown',
+  connectionStats = null,
   transfers = [],
   onFilesSelected = () => {},
   onCancelTransfer = () => {}
@@ -50,6 +54,17 @@ export function Room({
 
   const isConnected = roomStatus === 'connected';
   const isTerminated = ['closed', 'expired', 'error'].includes(roomStatus);
+
+  const getHeaderBadgeText = () => {
+    if (isP2PConnected) {
+      if (connectionType === 'relay') return '🔄 Relayed (TURN)';
+      if (connectionType === 'lan') return '⚡ P2P Direct (LAN)';
+      return '⚡ P2P Direct (STUN)';
+    }
+    if (isConnected) return '● Signaling Connected';
+    if (roomStatus === 'waiting') return '○ Waiting for Peer';
+    return 'Closed';
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -90,15 +105,25 @@ export function Room({
                 ? 'badge-waiting'
                 : 'badge-closed'
             }`}
+            style={{
+              backgroundColor: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning-bg)' : undefined,
+              borderColor: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning-border)' : undefined,
+              color: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning)' : undefined
+            }}
           >
-            {isP2PConnected
-              ? '⚡ P2P Direct'
-              : isConnected
-              ? '● Signaling Connected'
-              : roomStatus === 'waiting'
-              ? '○ Waiting for Peer'
-              : 'Closed'}
+            {getHeaderBadgeText()}
           </span>
+          {isP2PConnected && connectionStats?.rtt != null && (
+            <span
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--color-text-muted)',
+                fontFamily: 'var(--font-mono)'
+              }}
+            >
+              {connectionStats.rtt}ms
+            </span>
+          )}
         </div>
 
         {/* Room Action Buttons */}
@@ -154,6 +179,8 @@ export function Room({
         isOwner={isOwner}
         isConnected={isConnected}
         isP2PConnected={isP2PConnected}
+        connectionType={connectionType}
+        connectionStats={connectionStats}
       />
 
       {/* Terminated State Banner */}

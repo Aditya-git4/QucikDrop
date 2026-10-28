@@ -4,7 +4,16 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
 
 ---
 
-## 🚀 Implemented Capabilities (Milestones 1–5)
+## 🚀 Implemented Capabilities (Milestones 1–6)
+- **TURN Relay & Network Fallback (Milestone 6)**:
+  - **Dynamic ICE Server Configuration**: Supports custom STUN and optional TURN servers (`TURN_URLS`).
+  - **Zero Root Secret Exposure**: Supports Coturn / RFC 5766 ephemeral HMAC-SHA1 tokens (`TURN_SECRET`) so root secrets never reach the browser.
+  - **Authenticated Distribution**: ICE servers are only provided to authenticated peers who create or successfully join a room with a valid single-use token.
+  - **Real-Time Connection Type Indicator**: Inspects active WebRTC candidate pairs (`stats` API / `selectedCandidatePair`) to surface whether the connection is:
+    - `⚡ P2P Direct (LAN)`: Local Wi-Fi direct connection.
+    - `⚡ P2P Direct (STUN)`: Reflexive NAT traversal.
+    - `🔄 Relayed (TURN)`: Relayed through TURN when symmetric NATs or restrictive firewalls block direct routes.
+  - **Real-Time RTT Monitoring**: Calculates and displays live round-trip time (ms) directly on the interface.
 - **Single-Origin Cloud Deployment (Milestone 5)**:
   - Infrastructure-as-code `render.yaml` blueprint for 1-click deployment to Render Free Web Service.
   - Automatic same-origin host matching: validates the `Host` header for zero-config production WebSocket connections without breaking cross-origin protections.
@@ -226,7 +235,7 @@ To test between a computer and phone on the same Wi-Fi network:
 
 ---
 
-## ⚠️ Current Scope & Limitations (Milestones 1–5)
-- **STUN Direct Connectivity**: Current WebRTC configuration relies on STUN (direct peer-to-peer connection). Symmetric NAT traversal requiring TURN relay will be introduced in Milestone 6.
+## ⚠️ Current Scope & Limitations (Milestones 1–6)
+- **TURN Relay Setup**: TURN relay is fully supported via environment variables (`TURN_URLS`, `TURN_SECRET` or `TURN_USERNAME`/`TURN_CREDENTIAL`). If no TURN server is configured in environment variables, the system defaults to Google STUN servers (direct P2P only).
 - **In-Memory State**: Ephemeral, zero-database architecture intentionally keeps rooms in server memory. Server restarts or Render Free idle spin-downs (after 15 minutes of inactivity) clear active room states.
 - **Strict Two Devices Per Room**: QuickDrop pairs exactly 2 devices per room. Reconnecting or adding a third device is intentionally rejected. If a connection drops, a new room must be created.
