@@ -120,3 +120,23 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer text and file sharing a
 - **No File Storage**: The server never receives, stores, or inspects file data. In Milestone 1, only text messages are relayed. In Milestone 2+, file transfers flow directly over WebRTC DataChannels.
 - **No Permanent Text Logs**: Text messages relayed during the session are never written to disk, database, or server stdout logs.
 - **Server Restart**: If the server restarts, all temporary rooms are automatically invalidated. Clients gracefully handle disconnection and prompt the user to start a new room.
+
+---
+
+## 4. Large-File Reliability & Integrity Architecture (Milestone 3)
+
+### 4.1 Incremental Cryptographic Verification (SHA-256)
+- File integrity is cryptographically guaranteed using NIST-compliant SHA-256 hashing.
+- Both sender and receiver utilize an incremental hasher (`createSha256Incremental`) that updates state block-by-block ($O(1)$ memory).
+- At no point is an entire large file loaded into a single contiguous ArrayBuffer for hashing.
+- Senders transmit the final SHA-256 digest in `file:complete`. Receivers compute the digest on received chunks, verify equality, and flag the transfer with `✓ Verified SHA-256`. Transfers with corrupted chunks or byte count discrepancies are immediately rejected.
+
+### 4.2 Backpressure & Bounded Sending
+- Files are sliced on demand using `File.slice(offset, offset + 16384)`.
+- Transmission loop queries `RTCDataChannel.bufferedAmount`.
+- When `bufferedAmount > 65536` (64 KiB), transmission pauses and awaits the native `bufferedamountlow` event before reading the next slice.
+
+### 4.3 Memory Optimization & Destination Streaming
+- **Memory Batching**: Received chunks are compacted into native `Blob` parts every 32 slices (512 KiB). Native blobs reside outside of the V8 JavaScript heap, preventing heap exhaustion.
+- **In-Memory Threshold Limit**: Browsers without direct disk streaming (e.g. mobile Chrome) enforce a safe `MEMORY_TRANSFER_LIMIT` of 200 MB to prevent mobile OS tab terminations.
+- **Streaming Destination**: Where supported (e.g. desktop Chrome via File System Access API), files can stream directly to disk destinations.

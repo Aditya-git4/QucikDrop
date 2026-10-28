@@ -287,11 +287,14 @@ Sent by sender or receiver to terminate an active transfer.
 ```
 
 #### E. File Complete (`file:complete`)
-Sent by sender when all chunks have been pushed to the channel.
+Sent by sender when all chunks have been transmitted, carrying the cryptographic SHA-256 manifest.
 ```json
 {
   "type": "file:complete",
-  "transferId": "transfer-abc1234"
+  "transferId": "transfer-abc1234",
+  "fileHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "totalBytes": 1048576,
+  "totalChunks": 64
 }
 ```
 

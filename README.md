@@ -4,8 +4,14 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
 
 ---
 
-## 🚀 Milestone 1 & 2 Features (Implemented)
+## 🚀 Milestone 1, 2 & 3 Features (Implemented)
 - **Zero Server File Storage**: Direct peer-to-peer data channels. The signaling server **never** receives or relays file payloads.
+- **Large-File Reliability & Integrity (Milestone 3)**:
+  - **Incremental SHA-256 Verification**: Both sender and receiver compute SHA-256 digests chunk-by-chunk ($O(1)$ memory).
+  - **Bit-Exact Integrity Guarantee**: Receiver verifies the cryptographic hash against the sender's manifest before completion. Corrupted chunks or truncated files are rejected with `INTEGRITY_MISMATCH`.
+  - **Verified Progress**: Progress bar reaches 100% only after cryptographic verification passes.
+  - **Memory Optimization**: Batches 16 KiB chunks into native `Blob` parts every 512 KiB to prevent JS heap exhaustion.
+  - **Memory Safeguards**: Enforces `MEMORY_TRANSFER_LIMIT` (200 MB) on mobile/in-memory browsers lacking direct disk streaming.
 - **Native WebRTC P2P**:
   - `RTCPeerConnection` with Google public STUN servers.
   - SDP offer & answer exchange via WebSocket signaling.
@@ -74,6 +80,7 @@ quickdrop/
 │   │   │   ├── peerConnection.js # WebRTC connection & candidate queueing
 │   │   │   └── signalingClient.js # WebSocket client service
 │   │   ├── utils/
+│   │   │   ├── cryptoUtils.js   # Pure JS incremental SHA-256 hasher (NIST bit-exact)
 │   │   │   ├── fileUtils.js     # Filename sanitization & download trigger
 │   │   │   ├── formatBytes.js   # Byte and speed formatting
 │   │   │   ├── roomUtils.js     # URL parsing & device detection

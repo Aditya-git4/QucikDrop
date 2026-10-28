@@ -24,6 +24,7 @@ export function TransferItem({ transfer, onCancel }) {
   const isSend = transfer.direction === 'send';
   const isCompleted = transfer.status === 'completed';
   const isCancelled = transfer.status === 'cancelled';
+  const isError = transfer.status === 'error';
   const isTransferring = transfer.status === 'transferring';
 
   return (
@@ -31,7 +32,7 @@ export function TransferItem({ transfer, onCancel }) {
       style={{
         padding: '12px 14px',
         backgroundColor: 'var(--color-surface)',
-        border: '1px solid var(--color-border)',
+        border: `1px solid ${isError ? 'var(--color-danger-border)' : 'var(--color-border)'}`,
         borderRadius: 'var(--radius-md)',
         display: 'flex',
         flexDirection: 'column',
@@ -57,6 +58,11 @@ export function TransferItem({ transfer, onCancel }) {
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
               {formatBytes(transfer.fileSize)} • {isSend ? 'Sending to peer' : 'Receiving from peer'}
+              {transfer.fileHash && (
+                <span style={{ marginLeft: '6px', fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}>
+                  [SHA-256: {transfer.fileHash.slice(0, 8)}...]
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -66,7 +72,7 @@ export function TransferItem({ transfer, onCancel }) {
           {isCompleted && (
             <>
               <span className="badge badge-connected" style={{ fontSize: '0.75rem' }}>
-                ✓ Complete
+                {transfer.verified ? '✓ Verified SHA-256' : '✓ Complete'}
               </span>
               {!isSend && transfer.downloadUrl && (
                 <button
@@ -87,6 +93,12 @@ export function TransferItem({ transfer, onCancel }) {
             </span>
           )}
 
+          {isError && (
+            <span className="badge badge-error" style={{ fontSize: '0.75rem' }}>
+              ✕ Failed
+            </span>
+          )}
+
           {isTransferring && (
             <button
               type="button"
@@ -99,6 +111,21 @@ export function TransferItem({ transfer, onCancel }) {
           )}
         </div>
       </div>
+
+      {/* Error Details */}
+      {isError && transfer.errorMessage && (
+        <div
+          style={{
+            fontSize: '0.8rem',
+            color: 'var(--color-danger)',
+            backgroundColor: 'var(--color-danger-bg)',
+            padding: '6px 10px',
+            borderRadius: 'var(--radius-sm)'
+          }}
+        >
+          {transfer.errorMessage}
+        </div>
+      )}
 
       {/* Progress Bar when Active */}
       {isTransferring && (

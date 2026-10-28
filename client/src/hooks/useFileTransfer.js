@@ -69,6 +69,8 @@ export function useFileTransfer({ peerConnection }) {
                 status: 'completed',
                 percent: 100,
                 bytesTransferred: data.fileSize,
+                fileHash: data.fileHash,
+                verified: data.verified || false,
                 downloadUrl: data.downloadUrl || null
               }
             : t
@@ -90,10 +92,46 @@ export function useFileTransfer({ peerConnection }) {
       );
     };
 
+    const handleTransferError = (data) => {
+      setTransfers((prev) => {
+        const existing = prev.find((t) => t.transferId === data.transferId);
+        if (existing) {
+          return prev.map((t) =>
+            t.transferId === data.transferId
+              ? {
+                  ...t,
+                  status: 'error',
+                  errorMessage: data.message,
+                  errorCode: data.code,
+                  speed: 0
+                }
+              : t
+          );
+        }
+        return [
+          ...prev,
+          {
+            transferId: data.transferId,
+            fileName: 'Transfer Error',
+            fileSize: 0,
+            direction: 'receive',
+            status: 'error',
+            errorMessage: data.message,
+            errorCode: data.code,
+            bytesTransferred: 0,
+            percent: 0,
+            speed: 0,
+            downloadUrl: null
+          }
+        ];
+      });
+    };
+
     manager.on('transferStarted', handleTransferStarted);
     manager.on('progress', handleProgress);
     manager.on('transferCompleted', handleTransferCompleted);
     manager.on('transferCancelled', handleTransferCancelled);
+    manager.on('transferError', handleTransferError);
 
     return () => {
       managerRef.current = null;

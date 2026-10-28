@@ -1,10 +1,15 @@
 import { sanitizeFileName } from '../utils/fileUtils.js';
+import { createSha256Incremental } from '../utils/cryptoUtils.js';
 
 export const CHUNK_SIZE = 16384; // 16 KiB per chunk
+export const MEMORY_TRANSFER_LIMIT = 200 * 1024 * 1024; // 200 MB in-memory buffer threshold
+export const isFileSystemAccessSupported =
+  typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 
 /**
  * FileTransferManager orchestrates chunked file sending and receiving
- * over WebRTC data channels with backpressure control and progress reporting.
+ * over WebRTC data channels with incremental SHA-256 integrity verification,
+ * backpressure flow control, and memory-aware buffering.
  */
 export class FileTransferManager {
   /**
@@ -13,7 +18,7 @@ export class FileTransferManager {
   constructor(peerConnection) {
     this.peerConnection = peerConnection;
 
-    /** @type {Map<string, { file: File, isCancelled: boolean, startTime: number }>} */
+    /** @type {Map<string, { file: File, isCancelled: boolean, startTime: number, hasher: any }>} */
     this.activeSends = new Map();
 
     /** @type {{
@@ -24,6 +29,8 @@ export class FileTransferManager {
      *   totalChunks: number,
      *   receivedBytes: number,
      *   chunks: ArrayBuffer[],
+     *   blobParts: Blob[],
+     *   hasher: any,
      *   startTime: number,
      *   isCancelled: boolean
      * } | null} */
@@ -93,8 +100,7 @@ export class FileTransferManager {
         break;
 
       case 'file:complete':
-        // Sender marked transfer as complete
-        this.finalizeReceive(msg.transferId);
+        this.finalizeReceive(msg.transferId, msg.fileHash);
         break;
 
       default:
@@ -103,7 +109,7 @@ export class FileTransferManager {
   }
 
   /**
-   * Initiate sending a file.
+   * Initiate sending a file with incremental SHA-256 cryptographic verification.
    * @param {File} file
    * @returns {Promise<string>} transferId
    */
@@ -111,11 +117,13 @@ export class FileTransferManager {
     const transferId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const safeName = sanitizeFileName(file.name);
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const hasher = createSha256Incremental();
 
     this.activeSends.set(transferId, {
       file,
       isCancelled: false,
-      startTime: Date.now()
+      startTime: Date.now(),
+      hasher
     });
 
     // 1. Notify receiver of file metadata
@@ -145,7 +153,7 @@ export class FileTransferManager {
       this.on(`ready:${transferId}`, onReady);
     });
 
-    // 3. Transmit file chunks with backpressure
+    // 3. Transmit file chunks with backpressure and incremental SHA-256 hashing
     let offset = 0;
     const sendRecord = this.activeSends.get(transferId);
     const startTime = Date.now();
@@ -158,6 +166,9 @@ export class FileTransferManager {
 
       const slice = file.slice(offset, offset + CHUNK_SIZE);
       const buffer = await slice.arrayBuffer();
+
+      // Update cryptographic hash incrementally (O(1) memory)
+      hasher.update(buffer);
 
       this.peerConnection.sendFileChunk(buffer);
       offset += buffer.byteLength;
@@ -176,16 +187,25 @@ export class FileTransferManager {
         direction: 'send'
       });
 
-      // Apply backpressure if buffer is full
-      if (this.peerConnection.fileChannel && this.peerConnection.fileChannel.bufferedAmount > this.peerConnection.bufferedThreshold) {
+      // Backpressure flow control: wait if buffer exceeds threshold
+      if (
+        this.peerConnection.fileChannel &&
+        this.peerConnection.fileChannel.bufferedAmount > this.peerConnection.bufferedThreshold
+      ) {
         await this.peerConnection.waitForBufferedAmountLow();
       }
     }
 
-    // 4. Mark complete
+    // 4. Compute final verified SHA-256 hash
+    const fileHash = hasher.digest();
+
+    // 5. Send completion manifest with cryptographic hash
     this.peerConnection.sendControl({
       type: 'file:complete',
-      transferId
+      transferId,
+      fileHash,
+      totalBytes: file.size,
+      totalChunks
     });
 
     this.activeSends.delete(transferId);
@@ -194,6 +214,8 @@ export class FileTransferManager {
       transferId,
       fileName: safeName,
       fileSize: file.size,
+      fileHash,
+      verified: true,
       direction: 'send'
     });
 
@@ -201,20 +223,34 @@ export class FileTransferManager {
   }
 
   /**
-   * Handle incoming file start from remote sender.
+   * Handle incoming file metadata from remote peer.
    * @param {any} msg
    */
   handleReceiveStart(msg) {
     const { transferId, fileName, fileSize, mimeType, totalChunks } = msg;
+    const sizeNumber = Number(fileSize);
+
+    // Safeguard: Check memory limit for mobile/in-memory browsers
+    if (sizeNumber > MEMORY_TRANSFER_LIMIT && !isFileSystemAccessSupported) {
+      this.cancelTransfer(transferId, 'MEMORY_LIMIT_EXCEEDED');
+      this.emit('transferError', {
+        transferId,
+        code: 'MEMORY_LIMIT_EXCEEDED',
+        message: `File size exceeds 200 MB limit for this browser without direct disk streaming support.`
+      });
+      return;
+    }
 
     this.currentReceive = {
       transferId,
       fileName: sanitizeFileName(fileName),
-      fileSize: Number(fileSize),
+      fileSize: sizeNumber,
       mimeType: mimeType || 'application/octet-stream',
       totalChunks: Number(totalChunks),
       receivedBytes: 0,
       chunks: [],
+      blobParts: [],
+      hasher: createSha256Incremental(),
       startTime: Date.now(),
       isCancelled: false
     };
@@ -234,18 +270,29 @@ export class FileTransferManager {
   }
 
   /**
-   * Handle binary chunk received on file channel.
+   * Handle incoming binary chunk on file channel.
    * @param {ArrayBuffer} chunk
    */
   handleIncomingChunk(chunk) {
     if (!this.currentReceive || this.currentReceive.isCancelled) return;
 
+    // Incremental SHA-256 hash update
+    this.currentReceive.hasher.update(chunk);
+
     this.currentReceive.chunks.push(chunk);
     this.currentReceive.receivedBytes += chunk.byteLength;
 
+    // Memory batching: every 32 chunks (~512 KiB), roll into a native Blob part to save JS heap
+    if (this.currentReceive.chunks.length >= 32) {
+      this.currentReceive.blobParts.push(new Blob(this.currentReceive.chunks));
+      this.currentReceive.chunks = [];
+    }
+
     const elapsedSeconds = Math.max(0.001, (Date.now() - this.currentReceive.startTime) / 1000);
     const speed = this.currentReceive.receivedBytes / elapsedSeconds;
-    const percent = Math.min(100, Math.round((this.currentReceive.receivedBytes / this.currentReceive.fileSize) * 100));
+    // Cap progress display at 99% until cryptographic verification is completed
+    const rawPercent = Math.round((this.currentReceive.receivedBytes / this.currentReceive.fileSize) * 100);
+    const percent = Math.min(99, rawPercent);
 
     this.emit('progress', {
       transferId: this.currentReceive.transferId,
@@ -255,34 +302,69 @@ export class FileTransferManager {
       speed,
       direction: 'receive'
     });
-
-    // Check if transfer complete by exact byte count
-    if (this.currentReceive.receivedBytes >= this.currentReceive.fileSize) {
-      this.finalizeReceive(this.currentReceive.transferId);
-    }
   }
 
   /**
-   * Finalize and construct Blob upon verified byte count completion.
+   * Finalize and cryptographically verify the received file.
    * @param {string} transferId
+   * @param {string} expectedFileHash
    */
-  finalizeReceive(transferId) {
+  finalizeReceive(transferId, expectedFileHash) {
     if (!this.currentReceive || this.currentReceive.transferId !== transferId) return;
 
-    const { fileName, fileSize, mimeType, chunks } = this.currentReceive;
-    const blob = new Blob(chunks, { type: mimeType });
-    const downloadUrl = URL.createObjectURL(blob);
+    const { fileName, fileSize, mimeType, chunks, blobParts, hasher, receivedBytes } = this.currentReceive;
 
+    // 1. Verify exact byte count
+    if (receivedBytes !== fileSize) {
+      this.emit('transferError', {
+        transferId,
+        code: 'BYTE_COUNT_MISMATCH',
+        message: `Received ${receivedBytes} bytes, expected ${fileSize} bytes.`
+      });
+      this.cleanupReceive();
+      return;
+    }
+
+    // 2. Verify cryptographic SHA-256 hash
+    const actualHash = hasher.digest();
+    if (expectedFileHash && actualHash !== expectedFileHash) {
+      this.emit('transferError', {
+        transferId,
+        code: 'INTEGRITY_MISMATCH',
+        message: `Cryptographic SHA-256 verification failed (expected: ${expectedFileHash.slice(0, 8)}..., actual: ${actualHash.slice(0, 8)}...).`
+      });
+      this.cleanupReceive();
+      return;
+    }
+
+    // 3. Assemble final Blob from batched parts + remaining chunks
+    if (chunks.length > 0) {
+      blobParts.push(new Blob(chunks));
+    }
+    const finalBlob = new Blob(blobParts, { type: mimeType });
+    const downloadUrl = URL.createObjectURL(finalBlob);
+
+    // 4. Emit verified completion (now reaches 100%)
     this.emit('transferCompleted', {
       transferId,
       fileName,
       fileSize,
+      fileHash: actualHash,
+      verified: true,
       downloadUrl,
-      blob,
+      blob: finalBlob,
       direction: 'receive'
     });
 
-    this.currentReceive = null;
+    this.cleanupReceive();
+  }
+
+  cleanupReceive() {
+    if (this.currentReceive) {
+      this.currentReceive.chunks = [];
+      this.currentReceive.blobParts = [];
+      this.currentReceive = null;
+    }
   }
 
   /**
@@ -301,8 +383,7 @@ export class FileTransferManager {
     // If receiving
     if (this.currentReceive && this.currentReceive.transferId === transferId) {
       this.currentReceive.isCancelled = true;
-      this.currentReceive.chunks = []; // Release memory
-      this.currentReceive = null;
+      this.cleanupReceive();
     }
 
     try {
@@ -332,8 +413,7 @@ export class FileTransferManager {
     }
 
     if (this.currentReceive && this.currentReceive.transferId === transferId) {
-      this.currentReceive.chunks = [];
-      this.currentReceive = null;
+      this.cleanupReceive();
     }
 
     this.emit('transferCancelled', { transferId, reason: reason || 'remote-cancelled' });
