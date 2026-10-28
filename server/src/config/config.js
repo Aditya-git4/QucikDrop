@@ -36,4 +36,8 @@ export const config = {
   rateLimitMaxRoomCreates: parseInt(process.env.RATE_LIMIT_MAX_ROOM_CREATES || '10', 10),
   rateLimitMaxJoins: parseInt(process.env.RATE_LIMIT_MAX_JOINS || '15', 10),
   rateLimitMaxMessages: parseInt(process.env.RATE_LIMIT_MAX_MESSAGES || '60', 10),
+  rateLimitMaxRtc: parseInt(process.env.RATE_LIMIT_MAX_RTC || '120', 10),
+
+  // Security controls
+  requireJoinApproval: process.env.REQUIRE_JOIN_APPROVAL === 'true',
 };

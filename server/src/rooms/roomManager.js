@@ -44,6 +44,7 @@ export class RoomManager {
     this.roomTtlMs = options.roomTtlMs ?? config.roomTtlMs;
     this.maxRoomLifetimeMs = options.maxRoomLifetimeMs ?? config.maxRoomLifetimeMs;
     this.maxRooms = options.maxRooms ?? config.maxRooms;
+    this.requireJoinApproval = options.requireJoinApproval ?? config.requireJoinApproval;
     this.generationCounter = 0;
   }
 
@@ -358,6 +359,27 @@ export class RoomManager {
       }
     }
     return null;
+  }
+
+  /**
+   * Update room activity on genuine data exchange (e.g. text message or file transfer).
+   * Dynamically extends idle TTL up to the hard maximum lifetime.
+   * Protocol heartbeats (ping/pong) must NOT call this method.
+   * @param {string} roomId
+   */
+  touchActivity(roomId) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== 'connected') return;
+
+    const now = Date.now();
+    if (now > room.maxExpiresAt) {
+      this.expireRoom(roomId, room.roomGeneration);
+      return;
+    }
+
+    room.lastActivityAt = now;
+    room.expiresAt = Math.min(room.maxExpiresAt, now + this.roomTtlMs);
+    this.scheduleExpiration(room);
   }
 
   /**

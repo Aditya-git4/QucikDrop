@@ -190,6 +190,9 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     // Forward to the recipient peer
     sendJson(otherPeer.ws, relayPayload);
 
+    // Update room activity time
+    roomManager.touchActivity(roomId);
+
     // Send confirmation ack to sender
     sendJson(ws, {
       type: 'text:ack',
@@ -202,7 +205,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
 
   // 4. WEBRTC SIGNALING (offer, answer, ice-candidate)
   if (type === 'rtc:offer' || type === 'rtc:answer' || type === 'rtc:ice-candidate') {
-    if (!defaultRateLimiter.isAllowed(peerId, 'rtc_signaling', 120, config.rateLimitWindowMs)) {
+    if (!defaultRateLimiter.isAllowed(peerId, 'rtc_signaling', config.rateLimitMaxRtc, config.rateLimitWindowMs)) {
       return sendError(ws, ErrorCodes.RATE_LIMITED, 'WebRTC signaling rate limit exceeded.');
     }
 
@@ -224,6 +227,9 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     if (data.targetPeerId && data.targetPeerId !== otherPeer.peerId) {
       return sendError(ws, ErrorCodes.NOT_AUTHORIZED, 'Target peer is not in this room');
     }
+
+    // Update room activity time
+    roomManager.touchActivity(roomId);
 
     // Forward SDP / ICE candidate to other peer (do not log sensitive payload in production)
     sendJson(otherPeer.ws, {

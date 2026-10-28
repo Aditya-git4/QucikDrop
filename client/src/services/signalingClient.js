@@ -9,6 +9,11 @@ export class SignalingClient {
     /** @type {Map<string, Set<Function>>} */
     this.listeners = new Map();
     this.isConnected = false;
+    this.serverUrl = null;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 3;
+    this.reconnectTimer = null;
+    this.explicitClose = false;
   }
 
   /**
@@ -59,6 +64,9 @@ export class SignalingClient {
    * @returns {Promise<void>}
    */
   connect(url) {
+    this.serverUrl = url;
+    this.explicitClose = false;
+
     return new Promise((resolve, reject) => {
       if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
         return resolve();
@@ -72,6 +80,11 @@ export class SignalingClient {
 
       this.ws.onopen = () => {
         this.isConnected = true;
+        this.reconnectAttempts = 0;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
         this.emit('connected');
         resolve();
       };
@@ -79,6 +92,11 @@ export class SignalingClient {
       this.ws.onclose = (event) => {
         this.isConnected = false;
         this.emit('disconnected', { code: event.code, reason: event.reason });
+
+        // Safe bounded reconnection attempt if not explicitly closed
+        if (!this.explicitClose && this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.scheduleReconnect();
+        }
       };
 
       this.ws.onerror = (err) => {
@@ -89,6 +107,25 @@ export class SignalingClient {
         this.handleMessage(event.data);
       };
     });
+  }
+
+  /**
+   * Schedule a safe reconnect attempt with exponential backoff (1s, 2s, 4s).
+   */
+  scheduleReconnect() {
+    if (this.reconnectTimer || this.explicitClose || !this.serverUrl) return;
+
+    this.reconnectAttempts++;
+    const delay = Math.min(10000, Math.pow(2, this.reconnectAttempts - 1) * 1000);
+
+    this.emit('reconnecting', { attempt: this.reconnectAttempts, max: this.maxReconnectAttempts, delay });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.explicitClose && this.serverUrl) {
+        this.connect(this.serverUrl).catch(() => {});
+      }
+    }, delay);
   }
 
   /**
@@ -237,6 +274,11 @@ export class SignalingClient {
    * Cleanly disconnect the WebSocket and remove all event listeners.
    */
   disconnect() {
+    this.explicitClose = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.ws) {
       try {
         this.ws.close();
@@ -246,6 +288,7 @@ export class SignalingClient {
       this.ws = null;
     }
     this.isConnected = false;
+    this.reconnectAttempts = 0;
     this.listeners.clear();
   }
 }

@@ -35,6 +35,10 @@ export function useSignaling() {
       setConnectionStatus('disconnected');
     };
 
+    const handleReconnecting = () => {
+      setConnectionStatus('connecting');
+    };
+
     const handleRoomCreated = (msg) => {
       setRoomStatus('waiting');
       setRoomId(msg.roomId);
@@ -101,6 +105,7 @@ export function useSignaling() {
 
     client.on('connected', handleConnected);
     client.on('disconnected', handleDisconnected);
+    client.on('reconnecting', handleReconnecting);
     client.on('roomCreated', handleRoomCreated);
     client.on('roomJoined', handleRoomJoined);
     client.on('peerJoined', handlePeerJoined);
