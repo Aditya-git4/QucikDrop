@@ -8,6 +8,47 @@ import { ConnectionBanner } from './components/ConnectionBanner.jsx';
 import { ErrorMessage } from './components/ErrorMessage.jsx';
 import { parseInvitationFromUrl } from './utils/roomUtils.js';
 
+export class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('App ErrorBoundary caught:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '36px 20px', maxWidth: '440px', margin: '40px auto', textAlign: 'center' }} className="card">
+          <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>⚠️</div>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
+            Unable to render room
+          </h2>
+          <p style={{ fontSize: '0.88rem', color: 'var(--color-text-muted)', marginBottom: '20px' }}>
+            {this.state.error?.message || 'An unexpected error occurred.'}
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              window.location.href = '/';
+            }}
+          >
+            Return to Home
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function App() {
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
   const {
@@ -215,28 +256,30 @@ export function App() {
             errorMessage={errorMessage}
           />
         ) : (
-          <Room
-            roomId={roomId || ''}
-            joinToken={joinToken}
-            roomStatus={roomStatus}
-            isOwner={isOwner}
-            myDeviceName={myDeviceName}
-            peerDeviceName={peerDeviceName}
-            expiresAt={expiresAt}
-            messages={p2pMessages}
-            onSendMessage={sendP2PText}
-            onCloseRoom={closeRoom}
-            onReset={handleReset}
-            errorMessage={errorMessage}
-            isP2PConnected={isP2PConnected}
-            webrtcStatus={webrtcStatus}
-            connectionType={connectionType}
-            connectionStats={connectionStats}
-            transfers={transfers}
-            isWakeLockActive={isWakeLockActive}
-            onFilesSelected={queueFiles}
-            onCancelTransfer={cancelTransfer}
-          />
+          <ErrorBoundary>
+            <Room
+              roomId={roomId || ''}
+              joinToken={joinToken}
+              roomStatus={roomStatus}
+              isOwner={isOwner}
+              myDeviceName={myDeviceName}
+              peerDeviceName={peerDeviceName}
+              expiresAt={expiresAt}
+              messages={p2pMessages}
+              onSendMessage={sendP2PText}
+              onCloseRoom={closeRoom}
+              onReset={handleReset}
+              errorMessage={errorMessage}
+              isP2PConnected={isP2PConnected}
+              webrtcStatus={webrtcStatus}
+              connectionType={connectionType}
+              connectionStats={connectionStats}
+              transfers={transfers}
+              isWakeLockActive={isWakeLockActive}
+              onFilesSelected={queueFiles}
+              onCancelTransfer={cancelTransfer}
+            />
+          </ErrorBoundary>
         )}
       </main>
 

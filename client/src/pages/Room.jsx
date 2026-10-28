@@ -35,6 +35,9 @@ export function Room({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [mobileTab, setMobileTab] = useState('files'); // 'files' | 'chat' | 'info'
 
+  const isConnected = roomStatus === 'connected';
+  const isTerminated = ['closed', 'expired', 'error'].includes(roomStatus);
+
   const [soundActive, setSoundActive] = useState(() => isSoundEnabled());
   const [pasteNotice, setPasteNotice] = useState(null);
 
