@@ -11,7 +11,12 @@ import { hapticTap } from '../utils/soundEffects.js';
  *   disabled?: boolean
  * }} props
  */
-export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disabled = false }) {
+export function FileDropZone({
+  onFilesSelected,
+  onPasteClipboard = null,
+  isP2PConnected = false,
+  disabled = false
+}) {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -61,7 +66,7 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
           isDragOver ? 'var(--color-lime)' : 'rgba(228, 253, 151, 0.24)'
         }`,
         borderRadius: 'var(--radius-lg)',
-        padding: '28px 20px',
+        padding: '24px 18px',
         textAlign: 'center',
         background: isDragOver
           ? 'rgba(228, 253, 151, 0.15)'
@@ -77,11 +82,11 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
         alignItems: 'center',
         justifyContent: 'center',
         gap: '12px',
-        opacity: disabled ? 0.5 : 1,
+        opacity: disabled ? 0.6 : 1,
         userSelect: 'none',
         WebkitUserSelect: 'none',
         flex: '1 1 auto',
-        minHeight: '210px'
+        minHeight: '200px'
       }}
       role="button"
       tabIndex={disabled ? -1 : 0}
@@ -99,7 +104,6 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
         multiple
         onChange={handleFileInputChange}
         style={{ display: 'none' }}
-        disabled={disabled}
       />
       <input
         ref={folderInputRef}
@@ -109,7 +113,6 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
         multiple
         onChange={handleFileInputChange}
         style={{ display: 'none' }}
-        disabled={disabled}
       />
       <input
         ref={cameraInputRef}
@@ -118,7 +121,6 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
         capture="environment"
         onChange={handleFileInputChange}
         style={{ display: 'none' }}
-        disabled={disabled}
       />
 
       <div
@@ -143,95 +145,116 @@ export function FileDropZone({ onFilesSelected, onPasteClipboard = null, disable
       <div>
         <p style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--color-text-main)', marginBottom: '4px' }}>
           {disabled
-            ? 'Waiting for peer to establish P2P...'
+            ? 'Room Terminated'
             : isDragOver
             ? 'Release to Send Files & Folders'
-            : 'Drop Files or Click to Browse'}
+            : 'Drop Files or Click to Browse / Snap'}
         </p>
-        <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
+        <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', marginBottom: !isP2PConnected ? '6px' : '0' }}>
           Direct peer-to-peer streaming • Drop whole folders, photos, or documents
         </p>
+        {!isP2PConnected && !disabled && (
+          <span
+            style={{
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              padding: '2px 10px',
+              borderRadius: 'var(--radius-full)',
+              background: 'rgba(228, 253, 151, 0.1)',
+              color: 'var(--color-lime)',
+              border: '1px solid rgba(228, 253, 151, 0.25)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <span>⚡</span> Ready — select files now, auto-beams when peer connects
+          </span>
+        )}
       </div>
 
-      {!disabled && (
-        <div
+      {/* Action Buttons: ALWAYS rendered and accessible */}
+      <div
+        style={{
+          display: 'flex',
+          gap: '8px',
+          marginTop: '6px',
+          flexWrap: 'wrap',
+          justifyContent: 'center'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="btn btn-primary"
           style={{
-            display: 'flex',
-            gap: '8px',
-            marginTop: '8px',
-            flexWrap: 'wrap',
-            justifyContent: 'center'
+            padding: '6px 14px',
+            fontSize: '0.82rem',
+            minHeight: '34px'
           }}
-          onClick={(e) => e.stopPropagation()}
+          disabled={disabled}
+          onClick={() => {
+            hapticTap();
+            fileInputRef.current?.click();
+          }}
         >
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{
-              padding: '6px 14px',
-              fontSize: '0.82rem',
-              minHeight: '34px'
-            }}
-            onClick={() => {
-              hapticTap();
-              fileInputRef.current?.click();
-            }}
-          >
-            Browse Files
-          </button>
+          Browse Files
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{
+            padding: '6px 14px',
+            fontSize: '0.82rem',
+            minHeight: '34px'
+          }}
+          disabled={disabled}
+          onClick={() => {
+            hapticTap();
+            folderInputRef.current?.click();
+          }}
+        >
+          📁 Folder
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{
+            padding: '6px 14px',
+            fontSize: '0.82rem',
+            minHeight: '34px'
+          }}
+          disabled={disabled}
+          onClick={() => {
+            hapticTap();
+            cameraInputRef.current?.click();
+          }}
+          title="Snap a photo directly with your camera"
+        >
+          📷 Camera
+        </button>
+        {onPasteClipboard && (
           <button
             type="button"
             className="btn btn-secondary"
             style={{
               padding: '6px 14px',
               fontSize: '0.82rem',
-              minHeight: '34px'
+              minHeight: '34px',
+              borderColor: 'rgba(228, 253, 151, 0.35)',
+              color: 'var(--color-lime)'
             }}
+            disabled={disabled}
             onClick={() => {
               hapticTap();
-              folderInputRef.current?.click();
+              onPasteClipboard();
             }}
+            title="Paste image, files, or text from device clipboard"
           >
-            📁 Folder
+            📋 Paste
           </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            style={{
-              padding: '6px 14px',
-              fontSize: '0.82rem',
-              minHeight: '34px'
-            }}
-            onClick={() => {
-              hapticTap();
-              cameraInputRef.current?.click();
-            }}
-            title="Snap a photo directly with your camera"
-          >
-            📷 Camera
-          </button>
-          {onPasteClipboard && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{
-                padding: '6px 14px',
-                fontSize: '0.82rem',
-                minHeight: '34px',
-                borderColor: 'rgba(228, 253, 151, 0.35)',
-                color: 'var(--color-lime)'
-              }}
-              onClick={() => {
-                hapticTap();
-                onPasteClipboard();
-              }}
-              title="Paste image, files, or text from device clipboard"
-            >
-              📋 Paste
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

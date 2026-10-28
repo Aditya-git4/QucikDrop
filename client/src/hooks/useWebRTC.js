@@ -199,10 +199,33 @@ export function useWebRTC({
       }
     };
 
+    // 9. Incoming text messages via signaling WebSocket fallback
+    const handleSignalingTextMessage = (msg) => {
+      if (msg && msg.text) {
+        playMessageSound();
+        hapticTap();
+        setP2pMessages((prev) => {
+          if (prev.some((m) => m.id === msg.clientMessageId)) return prev;
+          return [
+            ...prev,
+            {
+              id: msg.clientMessageId || `${Date.now()}-${Math.random()}`,
+              text: msg.text,
+              deviceName: msg.deviceName || peerDeviceNameRef.current || 'Remote Peer',
+              sentAt: msg.sentAt || Date.now(),
+              isMine: false,
+              isRelayed: true
+            }
+          ];
+        });
+      }
+    };
+
     signalingClient.on('peerJoined', handlePeerJoined);
     signalingClient.on('rtc:offer', handleOffer);
     signalingClient.on('rtc:answer', handleAnswer);
     signalingClient.on('rtc:ice-candidate', handleRemoteIceCandidate);
+    signalingClient.on('textMessage', handleSignalingTextMessage);
 
     return () => {
       pcManager.off('iceCandidate', handleLocalIceCandidate);
@@ -216,6 +239,7 @@ export function useWebRTC({
       signalingClient.off('rtc:offer', handleOffer);
       signalingClient.off('rtc:answer', handleAnswer);
       signalingClient.off('rtc:ice-candidate', handleRemoteIceCandidate);
+      signalingClient.off('textMessage', handleSignalingTextMessage);
 
       pcManager.close();
       setIsP2PConnected(false);
@@ -225,35 +249,55 @@ export function useWebRTC({
     };
   }, [signalingClient, pcManager]);
 
-  /** Send chat text directly over WebRTC control channel */
+  /** Send chat text directly over WebRTC control channel or signaling WebSocket fallback */
   const sendP2PText = useCallback((text) => {
-    if (!text || !text.trim() || !isP2PConnected) return;
+    if (!text || !text.trim()) return;
 
     const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const now = Date.now();
+    const trimmed = text.trim();
 
-    const payload = {
-      type: 'chat',
-      clientMessageId,
-      text: text.trim(),
-      deviceName: myDeviceName,
-      sentAt: now
-    };
+    let delivered = false;
 
-    pcManager.sendControl(payload);
+    // 1. Try P2P DataChannel if connected
+    if (isP2PConnected && pcManager?.controlChannel?.readyState === 'open') {
+      try {
+        const payload = {
+          type: 'chat',
+          clientMessageId,
+          text: trimmed,
+          deviceName: myDeviceName,
+          sentAt: now
+        };
+        pcManager.sendControl(payload);
+        delivered = true;
+      } catch (err) {
+        console.warn('P2P control send failed, falling back to signaling:', err);
+      }
+    }
+
+    // 2. Fallback to WebSocket signaling relay
+    if (!delivered && signalingClient && signalingClient.isConnected) {
+      try {
+        signalingClient.sendTextMessage(trimmed, clientMessageId);
+        delivered = true;
+      } catch (err) {
+        console.warn('Signaling text send error:', err);
+      }
+    }
 
     // Append to local view
     setP2pMessages((prev) => [
       ...prev,
       {
         id: clientMessageId,
-        text: payload.text,
+        text: trimmed,
         deviceName: myDeviceName,
         sentAt: now,
         isMine: true
       }
     ]);
-  }, [isP2PConnected, myDeviceName, pcManager]);
+  }, [isP2PConnected, myDeviceName, pcManager, signalingClient]);
 
   return {
     webrtcStatus,

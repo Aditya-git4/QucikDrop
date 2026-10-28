@@ -43,6 +43,7 @@ export function TransferItem({ transfer, onCancel }) {
   const isCancelled = transfer.status === 'cancelled';
   const isError = transfer.status === 'error';
   const isTransferring = transfer.status === 'transferring';
+  const isQueued = transfer.status === 'queued';
 
   const isImage = isCompleted && transfer.downloadUrl && isImageMime(transfer.mimeType, transfer.fileName);
   const isAudio = isCompleted && transfer.downloadUrl && isAudioMime(transfer.mimeType, transfer.fileName);
@@ -143,6 +144,22 @@ export function TransferItem({ transfer, onCancel }) {
 
           {/* Status Badge & Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {isQueued && (
+              <>
+                <span className="badge badge-waiting" style={{ fontSize: '0.74rem' }}>
+                  ⏱ Queued
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onCancel(transfer.transferId)}
+                  className="btn btn-secondary"
+                  style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+
             {isCompleted && (
               <>
                 <span className="badge badge-connected" style={{ fontSize: '0.74rem' }}>
@@ -185,6 +202,25 @@ export function TransferItem({ transfer, onCancel }) {
             )}
           </div>
         </div>
+
+        {/* Queued Note */}
+        {isQueued && (
+          <div
+            style={{
+              fontSize: '0.78rem',
+              color: 'var(--color-text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 10px',
+              background: 'rgba(228, 253, 151, 0.05)',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid rgba(228, 253, 151, 0.15)'
+            }}
+          >
+            <span>⚡ Waiting for peer to establish P2P connection to beam file...</span>
+          </div>
+        )}
 
         {/* Inline Audio Player */}
         {isAudio && (

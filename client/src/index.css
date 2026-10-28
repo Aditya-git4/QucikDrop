@@ -550,24 +550,27 @@ body {
 /* Mobile Views (< 768px): Native iOS Tab Flow */
 @media (max-width: 767px) {
   .main-content {
-    padding: 14px 14px calc(24px + env(safe-area-inset-bottom, 24px));
-    gap: 14px;
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom, 24px));
+    gap: 12px;
   }
 
   .card {
-    padding: 18px 16px;
+    padding: 16px 14px;
     border-radius: var(--radius-md);
   }
 
   .room-dashboard-grid {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
   }
 
   .mobile-room-switcher {
     display: flex;
     margin-bottom: 2px;
+    position: sticky;
+    top: 56px;
+    z-index: 20;
   }
 
   .desktop-only-pane {
@@ -578,10 +581,46 @@ body {
     display: flex !important;
     flex-direction: column;
     width: 100%;
+    flex: 1;
   }
 
   .mobile-pane-inactive {
     display: none !important;
+  }
+
+  /* Compact Room Cockpit Header on Mobile */
+  .room-cockpit-header {
+    padding: 10px 12px !important;
+    gap: 8px !important;
+  }
+
+  .room-cockpit-header .room-title-row {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .room-cockpit-header .room-btn-row {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .room-cockpit-header button {
+    min-height: 32px !important;
+    padding: 4px 10px !important;
+    font-size: 0.78rem !important;
+  }
+
+  /* Chat Container on Mobile */
+  .text-transfer-card {
+    min-height: 360px !important;
+    height: calc(100dvh - 220px) !important;
+    max-height: 700px !important;
+  }
+
+  /* Compact QR code on Mobile */
+  .qr-display-container {
+    padding: 16px 12px !important;
+    gap: 14px !important;
   }
 }
 
@@ -606,7 +645,8 @@ body {
   }
 
   .desktop-column-left > .card,
-  .desktop-column-right > .card {
+  .desktop-column-right > .card,
+  .text-transfer-card {
     height: 100%;
     min-height: 520px;
     display: flex;

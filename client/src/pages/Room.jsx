@@ -151,7 +151,7 @@ export function Room({
     <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {/* Top Glass Room Header Bar */}
       <div
-        className="card"
+        className="card room-cockpit-header"
         style={{
           padding: '12px 18px',
           display: 'flex',
@@ -163,7 +163,7 @@ export function Room({
           border: '1px solid var(--glass-border)'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+        <div className="room-title-row" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Room:
           </span>
@@ -236,7 +236,7 @@ export function Room({
         </div>
 
         {/* Room Action Buttons & Sound Toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="room-btn-row" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             type="button"
             onClick={handlePasteFromDeviceClipboard}
@@ -465,7 +465,8 @@ export function Room({
                 <FileDropZone
                   onFilesSelected={onFilesSelected}
                   onPasteClipboard={handlePasteFromDeviceClipboard}
-                  disabled={!isP2PConnected}
+                  isP2PConnected={isP2PConnected}
+                  disabled={isTerminated}
                 />
 
                 <TransferQueue
@@ -482,7 +483,9 @@ export function Room({
                 messages={messages}
                 onSendMessage={onSendMessage}
                 onFilesSelected={onFilesSelected}
-                disabled={!isP2PConnected}
+                isP2PConnected={isP2PConnected}
+                isConnected={isConnected}
+                disabled={isTerminated}
               />
             </div>
           </div>

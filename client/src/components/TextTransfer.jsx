@@ -24,6 +24,8 @@ export function TextTransfer({
   messages,
   onSendMessage,
   onFilesSelected = null,
+  isP2PConnected = false,
+  isConnected = false,
   disabled = false
 }) {
   const [inputText, setInputText] = useState('');
@@ -179,12 +181,11 @@ export function TextTransfer({
 
   return (
     <div
-      className="card"
+      className="card text-transfer-card"
       style={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        minHeight: '520px',
         padding: '0',
         overflow: 'hidden',
         background: 'var(--glass-surface-1)',
@@ -194,7 +195,7 @@ export function TextTransfer({
       {/* Header Bar */}
       <div
         style={{
-          padding: '14px 20px',
+          padding: '12px 18px',
           borderBottom: '1px solid var(--glass-border)',
           background: 'var(--glass-surface-2)',
           backdropFilter: 'blur(16px)',
@@ -209,17 +210,43 @@ export function TextTransfer({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '1.1rem' }}>💬</span>
           <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
-            P2P Direct Messages
+            Messages
           </span>
           <span
             style={{
-              fontSize: '0.74rem',
+              fontSize: '0.72rem',
               fontWeight: 700,
               padding: '2px 8px',
               borderRadius: 'var(--radius-full)',
-              background: 'var(--color-lime-dim)',
-              color: 'var(--color-lime)',
-              border: '1px solid rgba(228, 253, 151, 0.25)'
+              background: isP2PConnected
+                ? 'var(--color-lime-dim)'
+                : isConnected
+                ? 'rgba(250, 204, 21, 0.12)'
+                : 'rgba(100, 116, 139, 0.2)',
+              color: isP2PConnected
+                ? 'var(--color-lime)'
+                : isConnected
+                ? 'var(--color-warning)'
+                : 'var(--color-text-subtle)',
+              border: `1px solid ${
+                isP2PConnected
+                  ? 'rgba(228, 253, 151, 0.3)'
+                  : isConnected
+                  ? 'rgba(250, 204, 21, 0.25)'
+                  : 'rgba(100, 116, 139, 0.2)'
+              }`
+            }}
+          >
+            {isP2PConnected ? '⚡ P2P Direct' : isConnected ? '🔄 Active (Signaling)' : 'Offline'}
+          </span>
+          <span
+            style={{
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: 'var(--radius-full)',
+              background: 'rgba(255, 255, 255, 0.08)',
+              color: 'var(--color-text-muted)'
             }}
           >
             {visibleMessages.length}
@@ -517,7 +544,7 @@ export function TextTransfer({
               onPaste={handleTextareaPaste}
               placeholder={
                 disabled
-                  ? 'Waiting for peer...'
+                  ? 'Room ended'
                   : destructSec > 0
                   ? `Self-destruct note (${destructSec}s)...`
                   : 'Type a message or drop links...'

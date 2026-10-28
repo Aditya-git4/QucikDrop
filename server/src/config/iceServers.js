@@ -2,11 +2,14 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 
 /**
- * Default public STUN servers for NAT discovery.
+ * Default public STUN servers for NAT discovery across multiple carriers and regions.
  */
 export const DEFAULT_STUN_SERVERS = [
   'stun:stun.l.google.com:19302',
-  'stun:stun1.l.google.com:19302'
+  'stun:stun1.l.google.com:19302',
+  'stun:stun2.l.google.com:19302',
+  'stun:stun.services.mozilla.com:3478',
+  'stun:stun.cloudflare.com:3478'
 ];
 
 /**

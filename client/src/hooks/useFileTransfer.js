@@ -197,10 +197,17 @@ export function useFileTransfer({ peerConnection }) {
     manager.on('transferCancelled', handleTransferCancelled);
     manager.on('transferError', handleTransferError);
 
+    // Auto-drain send queue when WebRTC P2P DataChannels open
+    const handleReady = () => {
+      processSendQueue();
+    };
+    peerConnection.on('ready', handleReady);
+
     return () => {
+      peerConnection.off('ready', handleReady);
       managerRef.current = null;
     };
-  }, [peerConnection]);
+  }, [peerConnection, processSendQueue]);
 
   /** Process the next file in the sequential send queue */
   const processSendQueue = useCallback(async () => {
@@ -208,10 +215,20 @@ export function useFileTransfer({ peerConnection }) {
       return;
     }
 
+    const pc = managerRef.current.peerConnection;
+    if (!pc?.fileChannel || pc.fileChannel.readyState !== 'open') {
+      return;
+    }
+
     isSendingRef.current = true;
-    const nextFile = sendQueueRef.current.shift();
+    const nextItem = sendQueueRef.current.shift();
+    const nextFile = nextItem?.file || nextItem;
+    const tempId = nextItem?.tempId;
 
     try {
+      if (tempId) {
+        setTransfers((prev) => prev.filter((t) => t.transferId !== tempId));
+      }
       await managerRef.current.sendFile(nextFile);
     } catch (err) {
       console.error('File send error:', err);
@@ -222,13 +239,35 @@ export function useFileTransfer({ peerConnection }) {
     }
   }, []);
 
-  /** Queue multiple files for sending */
+  /** Queue multiple files for sending (works immediately, auto-beams upon P2P connect) */
   const queueFiles = useCallback(
     (fileList) => {
       if (!fileList || fileList.length === 0) return;
 
       const newFiles = Array.from(fileList);
-      sendQueueRef.current.push(...newFiles);
+      const queueEntries = newFiles.map((file) => ({
+        tempId: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        file
+      }));
+
+      sendQueueRef.current.push(...queueEntries);
+
+      // Add to transfers UI state immediately for instant feedback
+      setTransfers((prev) => [
+        ...prev,
+        ...queueEntries.map(({ tempId, file }) => ({
+          transferId: tempId,
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type || null,
+          direction: 'send',
+          status: 'queued',
+          bytesTransferred: 0,
+          percent: 0,
+          speed: 0,
+          downloadUrl: null
+        }))
+      ]);
 
       processSendQueue();
     },
@@ -237,6 +276,9 @@ export function useFileTransfer({ peerConnection }) {
 
   /** Cancel an active or queued transfer */
   const cancelTransfer = useCallback((transferId) => {
+    sendQueueRef.current = sendQueueRef.current.filter((item) => (item.tempId || item.transferId) !== transferId);
+    setTransfers((prev) => prev.filter((t) => t.transferId !== transferId));
+
     if (managerRef.current) {
       managerRef.current.cancelTransfer(transferId);
     }

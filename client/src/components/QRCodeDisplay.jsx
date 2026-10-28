@@ -22,11 +22,13 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
   useEffect(() => {
     if (!canvasRef.current || !invitationUrl) return;
 
+    const qrWidth = typeof window !== 'undefined' && window.innerWidth < 480 ? 180 : 220;
+
     QRCode.toCanvas(
       canvasRef.current,
       invitationUrl,
       {
-        width: 220,
+        width: qrWidth,
         margin: 1,
         color: {
           dark: '#0e160d',
@@ -82,13 +84,14 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
 
   return (
     <div
+      className="qr-display-container"
       style={{
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         textAlign: 'center',
-        gap: '22px',
-        padding: '28px 16px',
+        gap: '16px',
+        padding: '20px 14px',
         position: 'relative'
       }}
     >
@@ -117,9 +120,10 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
 
       {/* QR Code Frame with Specular Sheen & Floating Depth */}
       <div
+        className="qr-canvas-frame"
         style={{
           position: 'relative',
-          padding: '16px',
+          padding: '12px',
           background: '#ffffff',
           borderRadius: 'var(--radius-xl)',
           boxShadow: '0 20px 45px rgba(0, 0, 0, 0.6), 0 0 40px rgba(228, 253, 151, 0.22)',
@@ -130,7 +134,7 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
       >
         <canvas
           ref={canvasRef}
-          style={{ width: '220px', height: '220px', display: 'block', borderRadius: 'var(--radius-md)' }}
+          style={{ display: 'block', borderRadius: 'var(--radius-md)' }}
         />
       </div>
 
