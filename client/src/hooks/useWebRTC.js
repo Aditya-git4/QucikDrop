@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { PeerConnectionManager } from '../services/peerConnection.js';
+import { playConnectSound, playMessageSound, hapticSuccess, hapticTap } from '../utils/soundEffects.js';
 
 /**
  * useWebRTC manages RTCPeerConnection negotiation, ICE signaling via WebSocket,
@@ -103,6 +104,8 @@ export function useWebRTC({
     const handleReady = () => {
       setWebrtcStatus('connected');
       setIsP2PConnected(true);
+      playConnectSound();
+      hapticSuccess();
     };
 
     // 4. Connection type and stats monitoring
@@ -120,6 +123,8 @@ export function useWebRTC({
     // 5. Incoming P2P chat messages over control DataChannel
     const handleControlMessage = (msg) => {
       if (msg && msg.type === 'chat') {
+        playMessageSound();
+        hapticTap();
         setP2pMessages((prev) => [
           ...prev,
           {

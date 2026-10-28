@@ -61,3 +61,112 @@ export function triggerDownload(fileOrUrl, fileName) {
     }, 60000);
   }
 }
+
+/**
+ * Check if a file is an image based on MIME type or extension.
+ */
+export function isImageMime(mimeType, fileName = '') {
+  if (mimeType && mimeType.startsWith('image/')) return true;
+  return /\.(jpe?g|png|gif|webp|svg|bmp|ico)$/i.test(fileName);
+}
+
+/**
+ * Check if a file is a video based on MIME type or extension.
+ */
+export function isVideoMime(mimeType, fileName = '') {
+  if (mimeType && mimeType.startsWith('video/')) return true;
+  return /\.(mp4|webm|ogg|mov)$/i.test(fileName);
+}
+
+/**
+ * Check if a file is audio based on MIME type or extension.
+ */
+export function isAudioMime(mimeType, fileName = '') {
+  if (mimeType && mimeType.startsWith('audio/')) return true;
+  return /\.(mp3|wav|ogg|aac|m4a|flac)$/i.test(fileName);
+}
+
+/**
+ * Recursively extract files from a WebKit directory entry or flat file list.
+ * Supports dropping whole folders.
+ * @param {DataTransfer} dataTransfer
+ * @returns {Promise<File[]>}
+ */
+export async function extractFilesFromDataTransfer(dataTransfer) {
+  if (!dataTransfer) return [];
+
+  const items = dataTransfer.items;
+  if (!items || items.length === 0) {
+    return Array.from(dataTransfer.files || []);
+  }
+
+  const filePromises = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (typeof item.webkitGetAsEntry === 'function') {
+      const entry = item.webkitGetAsEntry();
+      if (entry) {
+        filePromises.push(traverseEntry(entry, ''));
+        continue;
+      }
+    }
+
+    const file = item.getAsFile?.();
+    if (file) {
+      filePromises.push(Promise.resolve([file]));
+    }
+  }
+
+  const results = await Promise.all(filePromises);
+  return results.flat();
+}
+
+/**
+ * Helper to recursively traverse DirectoryEntry and FileEntry.
+ */
+async function traverseEntry(entry, currentPath) {
+  if (entry.isFile) {
+    return new Promise((resolve) => {
+      entry.file((file) => {
+        // Tag with relative path if inside a dropped folder
+        const relativePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+        Object.defineProperty(file, 'relativePath', {
+          value: relativePath,
+          writable: false
+        });
+        resolve([file]);
+      }, () => resolve([]));
+    });
+  }
+
+  if (entry.isDirectory) {
+    const dirReader = entry.createReader();
+    const dirPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+    const entries = await readAllEntries(dirReader);
+    const nested = await Promise.all(entries.map((child) => traverseEntry(child, dirPath)));
+    return nested.flat();
+  }
+
+  return [];
+}
+
+/**
+ * Read all entries in a directory reader (handles batching in Chrome).
+ */
+function readAllEntries(dirReader) {
+  const allEntries = [];
+
+  function readBatch(resolve) {
+    dirReader.readEntries((entries) => {
+      if (entries.length === 0) {
+        resolve(allEntries);
+      } else {
+        allEntries.push(...entries);
+        readBatch(resolve);
+      }
+    }, () => resolve(allEntries));
+  }
+
+  return new Promise((resolve) => readBatch(resolve));
+}

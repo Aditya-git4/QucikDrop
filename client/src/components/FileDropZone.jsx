@@ -1,15 +1,19 @@
 import React, { useState, useRef } from 'react';
+import { extractFilesFromDataTransfer } from '../utils/fileUtils.js';
+import { hapticTap } from '../utils/soundEffects.js';
 
 /**
  * Modern iOS glassmorphic drag-and-drop file selection zone with tactile feedback.
+ * Supports individual files and recursive directory / folder drops.
  * @param {{
- *   onFilesSelected: (files: FileList) => void,
+ *   onFilesSelected: (files: FileList | File[]) => void,
  *   disabled?: boolean
  * }} props
  */
 export function FileDropZone({ onFilesSelected, disabled = false }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -22,18 +26,21 @@ export function FileDropZone({ onFilesSelected, disabled = false }) {
     setIsDragOver(false);
   };
 
-  const handleDrop = (e) => {
+  const handleDrop = async (e) => {
     e.preventDefault();
     setIsDragOver(false);
     if (disabled) return;
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFilesSelected(e.dataTransfer.files);
+    hapticTap();
+    const files = await extractFilesFromDataTransfer(e.dataTransfer);
+    if (files.length > 0) {
+      onFilesSelected(files);
     }
   };
 
   const handleFileInputChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
+      hapticTap();
       onFilesSelected(e.target.files);
       e.target.value = ''; // Reset input so same file can be selected again
     }
@@ -89,6 +96,16 @@ export function FileDropZone({ onFilesSelected, disabled = false }) {
         style={{ display: 'none' }}
         disabled={disabled}
       />
+      <input
+        ref={folderInputRef}
+        type="file"
+        // @ts-ignore
+        webkitdirectory="true"
+        multiple
+        onChange={handleFileInputChange}
+        style={{ display: 'none' }}
+        disabled={disabled}
+      />
 
       <div
         style={{
@@ -114,27 +131,41 @@ export function FileDropZone({ onFilesSelected, disabled = false }) {
           {disabled
             ? 'Connect via WebRTC to share files'
             : isDragOver
-            ? 'Release to Send Immediately'
-            : 'Click to Select or Drop Files'}
+            ? 'Release to Send Files & Folders'
+            : 'Click to Select or Drop Files & Folders'}
         </p>
         <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
-          Direct peer-to-peer streaming • Zero server relay
+          Direct peer-to-peer streaming • Drop whole folders or single files
         </p>
       </div>
 
       {!disabled && (
-        <span
-          className="btn btn-primary"
-          style={{
-            padding: '8px 18px',
-            fontSize: '0.82rem',
-            minHeight: '34px',
-            marginTop: '4px',
-            pointerEvents: 'none'
-          }}
-        >
-          Browse Device Files
-        </span>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{
+              padding: '6px 16px',
+              fontSize: '0.82rem',
+              minHeight: '34px'
+            }}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            Browse Files
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{
+              padding: '6px 16px',
+              fontSize: '0.82rem',
+              minHeight: '34px'
+            }}
+            onClick={() => folderInputRef.current?.click()}
+          >
+            📁 Select Folder
+          </button>
+        </div>
       )}
     </div>
   );

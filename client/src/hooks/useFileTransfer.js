@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { FileTransferManager } from '../services/fileTransfer.js';
+import { playSendSound, playSuccessSound, hapticSuccess, hapticError } from '../utils/soundEffects.js';
 
 /**
  * useFileTransfer manages the file queue, transmission progress,
@@ -77,6 +78,7 @@ export function useFileTransfer({ peerConnection }) {
     managerRef.current = manager;
 
     const handleTransferStarted = (data) => {
+      playSendSound();
       setTransfers((prev) => {
         const existing = prev.find((t) => t.transferId === data.transferId);
         if (existing) {
@@ -90,6 +92,7 @@ export function useFileTransfer({ peerConnection }) {
             transferId: data.transferId,
             fileName: data.fileName,
             fileSize: data.fileSize,
+            mimeType: data.mimeType || null,
             direction: data.direction,
             status: 'transferring',
             bytesTransferred: 0,
@@ -118,6 +121,8 @@ export function useFileTransfer({ peerConnection }) {
     };
 
     const handleTransferCompleted = (data) => {
+      playSuccessSound();
+      hapticSuccess();
       setTransfers((prev) =>
         prev.map((t) =>
           t.transferId === data.transferId
@@ -126,6 +131,7 @@ export function useFileTransfer({ peerConnection }) {
                 status: 'completed',
                 percent: 100,
                 bytesTransferred: data.fileSize,
+                mimeType: data.mimeType || t.mimeType,
                 fileHash: data.fileHash,
                 verified: data.verified || false,
                 downloadUrl: data.downloadUrl || null
@@ -150,6 +156,7 @@ export function useFileTransfer({ peerConnection }) {
     };
 
     const handleTransferError = (data) => {
+      hapticError();
       setTransfers((prev) => {
         const existing = prev.find((t) => t.transferId === data.transferId);
         if (existing) {

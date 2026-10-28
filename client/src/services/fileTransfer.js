@@ -399,6 +399,7 @@ export class FileTransferManager {
       transferId,
       fileName,
       fileSize,
+      mimeType,
       fileHash: actualHash,
       verified: true,
       downloadUrl,

@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DeviceStatus } from '../components/DeviceStatus.jsx';
 import { QRCodeDisplay } from '../components/QRCodeDisplay.jsx';
 import { TextTransfer } from '../components/TextTransfer.jsx';
 import { FileDropZone } from '../components/FileDropZone.jsx';
 import { TransferQueue } from '../components/TransferQueue.jsx';
+import { playSendSound, hapticTap, isSoundEnabled, setSoundEnabled } from '../utils/soundEffects.js';
 
 /**
  * Modern iOS glassmorphic Room page handling waiting, connected, WebRTC P2P file & text sharing.
@@ -34,8 +35,49 @@ export function Room({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [mobileTab, setMobileTab] = useState('files'); // 'files' | 'chat' | 'info'
 
-  const isConnected = roomStatus === 'connected';
-  const isTerminated = ['closed', 'expired', 'error'].includes(roomStatus);
+  const [soundActive, setSoundActive] = useState(() => isSoundEnabled());
+  const [pasteNotice, setPasteNotice] = useState(null);
+
+  const toggleSound = () => {
+    const next = !soundActive;
+    setSoundActive(next);
+    setSoundEnabled(next);
+    hapticTap();
+  };
+
+  // Global Clipboard Paste (Ctrl+V / Cmd+V)
+  useEffect(() => {
+    if (!isConnected || isTerminated || !isP2PConnected) return;
+
+    const handlePaste = (e) => {
+      // Don't intercept if user is currently typing in an input/textarea
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      const clipboardFiles = e.clipboardData?.files;
+      if (clipboardFiles && clipboardFiles.length > 0) {
+        e.preventDefault();
+        hapticTap();
+        playSendSound();
+        onFilesSelected(clipboardFiles);
+        setPasteNotice(`Pasted ${clipboardFiles.length} item(s) from clipboard`);
+        setTimeout(() => setPasteNotice(null), 3000);
+        return;
+      }
+
+      const text = e.clipboardData?.getData('text');
+      if (text && text.trim()) {
+        e.preventDefault();
+        hapticTap();
+        onSendMessage(text.trim());
+        setPasteNotice('Pasted text message sent');
+        setTimeout(() => setPasteNotice(null), 3000);
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [isConnected, isTerminated, isP2PConnected, onFilesSelected, onSendMessage]);
 
   const getHeaderBadgeText = () => {
     if (isP2PConnected) {
@@ -128,8 +170,24 @@ export function Room({
           )}
         </div>
 
-        {/* Room Action Buttons */}
-        <div>
+        {/* Room Action Buttons & Sound Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            type="button"
+            onClick={toggleSound}
+            className="btn btn-secondary"
+            style={{
+              minHeight: '36px',
+              padding: '6px 12px',
+              fontSize: '0.82rem',
+              borderRadius: 'var(--radius-full)'
+            }}
+            title={soundActive ? 'Mute sound effects' : 'Unmute sound effects'}
+            aria-label={soundActive ? 'Mute sound effects' : 'Unmute sound effects'}
+          >
+            {soundActive ? '🔔 Sound On' : '🔕 Muted'}
+          </button>
+
           {!isTerminated ? (
             showCloseConfirm ? (
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -173,6 +231,26 @@ export function Room({
           )}
         </div>
       </div>
+
+      {/* Clipboard Paste Notification Toast */}
+      {pasteNotice && (
+        <div
+          className="animate-entrance"
+          style={{
+            padding: '10px 20px',
+            background: 'var(--color-lime)',
+            color: 'var(--color-lime-text)',
+            fontWeight: 800,
+            borderRadius: 'var(--radius-full)',
+            boxShadow: '0 8px 25px rgba(228, 253, 151, 0.45)',
+            textAlign: 'center',
+            fontSize: '0.88rem',
+            letterSpacing: '0.01em'
+          }}
+        >
+          📋 {pasteNotice}
+        </div>
+      )}
 
       {/* Paired Device Status Pill Bar */}
       <DeviceStatus
