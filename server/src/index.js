@@ -37,13 +37,30 @@ app.get('/health', (req, res) => {
 // Serve frontend in production (or if client/dist exists)
 const clientDistPath = path.resolve(__dirname, '../../client/dist');
 if (fs.existsSync(clientDistPath)) {
-  app.use(express.static(clientDistPath));
+  app.use(express.static(clientDistPath, {
+    setHeaders: (res, filePath) => {
+      // Never cache index.html or sw.js so redeploys and refreshes are never stale
+      if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      } else if (filePath.includes(path.sep + 'assets' + path.sep)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    }
+  }));
 
-  // SPA fallback for /room/:roomId routes
+  // SPA fallback for HTML navigation routes
+  // NEVER send index.html for missing static assets or files with extensions
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/ws') || req.path.startsWith('/health')) {
       return next();
     }
+    // Return 404 for missing static assets to prevent script execution/syntax errors
+    if (req.path.startsWith('/assets/') || path.extname(req.path)) {
+      return res.status(404).type('text/plain').send('Asset not found');
+    }
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(clientDistPath, 'index.html'));
   });
 }

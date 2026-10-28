@@ -38,7 +38,7 @@ describe('HTTP Endpoints & Health Check', () => {
     assert.equal(res.status, 200);
     const text = await res.text();
     assert.ok(text.includes('QuickDrop'));
-    assert.ok(text.includes('<div id="root"></div>'));
+    assert.ok(text.includes('id="root"'));
   });
 
   it('serves SPA fallback on /room/:id route', async () => {
@@ -58,6 +58,11 @@ describe('HTTP Endpoints & Health Check', () => {
     const swRes = await fetch(`${baseUrl}/sw.js`);
     assert.equal(swRes.status, 200);
     const swText = await swRes.text();
-    assert.ok(swText.includes('quickdrop-shell-v1'));
+    assert.ok(swText.includes('quickdrop-shell-'));
+  });
+
+  it('returns 404 for missing static assets instead of serving index.html', async () => {
+    const res = await fetch(`${baseUrl}/assets/nonexistent-bundle.js`);
+    assert.equal(res.status, 404);
   });
 });

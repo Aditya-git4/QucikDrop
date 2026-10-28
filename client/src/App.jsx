@@ -133,6 +133,11 @@ export function App() {
     if (urlRoomId && urlJoinToken) {
       // Auto-join from QR code scan or link click
       joinRoom(urlRoomId, urlJoinToken);
+    } else if (urlRoomId && !urlJoinToken) {
+      // If user refreshed on /room/:id without token, normalize address bar cleanly to /
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.history.replaceState(null, '', '/');
+      }
     }
   }, [joinRoom]);
 
@@ -236,28 +241,28 @@ export function App() {
 
       {/* Main Content Area */}
       <main className="main-content">
-        <ConnectionBanner status={connectionStatus} />
+        <ErrorBoundary>
+          <ConnectionBanner status={connectionStatus} />
 
-        {/* Global Error Banner */}
-        {errorMessage && roomStatus === 'idle' && (
-          <ErrorMessage message={errorMessage} code={errorCode} onDismiss={handleReset} />
-        )}
+          {/* Global Error Banner */}
+          {errorMessage && roomStatus === 'idle' && (
+            <ErrorMessage message={errorMessage} code={errorCode} onDismiss={handleReset} />
+          )}
 
-        {!isInRoomView ? (
-          <Home
-            onCreateRoom={(name) => {
-              setMyDeviceName(name);
-              createRoom(name);
-            }}
-            onJoinRoom={(targetRoomId, targetToken, name) => {
-              setMyDeviceName(name);
-              joinRoom(targetRoomId, targetToken, name);
-            }}
-            isConnecting={connectionStatus === 'connecting'}
-            errorMessage={errorMessage}
-          />
-        ) : (
-          <ErrorBoundary>
+          {!isInRoomView ? (
+            <Home
+              onCreateRoom={(name) => {
+                setMyDeviceName(name);
+                createRoom(name);
+              }}
+              onJoinRoom={(targetRoomId, targetToken, name) => {
+                setMyDeviceName(name);
+                joinRoom(targetRoomId, targetToken, name);
+              }}
+              isConnecting={connectionStatus === 'connecting'}
+              errorMessage={errorMessage}
+            />
+          ) : (
             <Room
               roomId={roomId || ''}
               joinToken={joinToken}
@@ -281,8 +286,8 @@ export function App() {
               onCancelTransfer={cancelTransfer}
               onClearCompleted={clearCompleted}
             />
-          </ErrorBoundary>
-        )}
+          )}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}

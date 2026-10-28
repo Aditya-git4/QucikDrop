@@ -1,14 +1,13 @@
 /**
  * QuickDrop Service Worker (PWA)
- * Caches app shell for instant offline loading and enables PWA installability.
+ * Caches static icons/manifest for PWA installability and instant loading.
+ * Strictly avoids caching HTML to guarantee fresh deployment pickup on refresh.
  * Strictly avoids intercepting WebRTC signaling (/ws) or API endpoints (/health).
  */
 
-const CACHE_NAME = 'quickdrop-shell-v1';
+const CACHE_NAME = 'quickdrop-shell-v2';
 
 const SHELL_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/icons/icon.svg',
   '/icons/icon-192.png',
@@ -61,10 +60,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Navigation requests (HTML SPA routes): Network-first with cache fallback
+  // 3. Navigation requests (HTML SPA routes): Always fetch fresh from network
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match('/index.html') || caches.match('/'))
+      fetch(event.request, { cache: 'no-cache' }).catch(() => {
+        // Offline fallback only if completely disconnected
+        return caches.match('/index.html') || caches.match('/');
+      })
     );
     return;
   }
