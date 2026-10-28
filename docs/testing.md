@@ -44,6 +44,19 @@ npm test
   - Verifies `/health` JSON status and uptime metrics.
   - Verifies static serving of frontend `index.html`.
   - Verifies SPA fallback routing on `/room/:roomId`.
+  - Verifies serving of PWA `manifest.json` and `sw.js`.
+- **Unit: `iceServers.test.js` (Milestone 6)**:
+  - Verifies dynamic STUN & TURN parsing.
+  - Verifies RFC 5766 Coturn HMAC-SHA1 ephemeral credential generation and secrecy.
+  - Verifies static TURN credential formatting.
+- **Unit: `connectionStats.test.js` (Milestone 6)**:
+  - Verifies candidate pair classification for `relay`, `lan`, and reflexive `direct` connections.
+- **Unit: `cryptoUtils.test.js` (Milestone 3)**:
+  - Verifies pure JS incremental SHA-256 against NIST vectors and Node `crypto`.
+- **Unit: `fileTransferProtocol.test.js` (Milestone 2 & 3)**:
+  - Verifies 16 KiB chunk count calculation, backpressure buffer safety, bit corruption detection, and memory threshold guards.
+- **Unit: `securityHardening.test.js` (Milestone 4)**:
+  - Verifies hard room lifetime limit, generation collision guards, binary rejection, and rate limiter isolation.
 
 ---
 

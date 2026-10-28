@@ -4,7 +4,12 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer web application that en
 
 ---
 
-## 🚀 Implemented Capabilities (Milestones 1–6)
+## 🚀 Complete Capabilities (Milestones 1–7)
+- **Progressive Web App & Mobile Polish (Milestone 7)**:
+  - **PWA Installability**: Web App Manifest (`manifest.json`) and service worker (`sw.js`) with responsive 1-click install prompt.
+  - **Screen Wake Lock API**: Automatically prevents phone screen sleep during active file transfers via `navigator.wakeLock`, with `🔆 Screen Awake` indicator.
+  - **Native Web Share API**: Direct mobile sharing sheet integration (`navigator.share`) for 1-tap room link sharing via WhatsApp, SMS, or AirDrop/Nearby Share.
+  - **Mobile Touch Refinements**: 44px minimum touch targets, `touch-action: manipulation` (no double-tap zoom delay), and safe area insets for notches.
 - **TURN Relay & Network Fallback (Milestone 6)**:
   - **Dynamic ICE Server Configuration**: Supports custom STUN and optional TURN servers (`TURN_URLS`).
   - **Zero Root Secret Exposure**: Supports Coturn / RFC 5766 ephemeral HMAC-SHA1 tokens (`TURN_SECRET`) so root secrets never reach the browser.
@@ -232,10 +237,15 @@ To test between a computer and phone on the same Wi-Fi network:
 | `MAX_WS_MESSAGE_BYTES`| `16384` | Max WebSocket payload size (16 KiB) |
 | `MAX_TEXT_LENGTH` | `4096` | Max characters per text message |
 | `MAX_ROOMS` | `100` | Max concurrent active rooms |
+| `STUN_URLS` | *(Optional)* | Comma-separated STUN server URLs |
+| `TURN_URLS` | *(Optional)* | Comma-separated TURN relay URLs |
+| `TURN_SECRET` | *(Optional)* | RFC 5766 Coturn HMAC-SHA1 shared secret |
+| `TURN_USERNAME` | *(Optional)* | Static TURN username |
+| `TURN_CREDENTIAL` | *(Optional)* | Static TURN credential/password |
 
 ---
 
-## ⚠️ Current Scope & Limitations (Milestones 1–6)
-- **TURN Relay Setup**: TURN relay is fully supported via environment variables (`TURN_URLS`, `TURN_SECRET` or `TURN_USERNAME`/`TURN_CREDENTIAL`). If no TURN server is configured in environment variables, the system defaults to Google STUN servers (direct P2P only).
-- **In-Memory State**: Ephemeral, zero-database architecture intentionally keeps rooms in server memory. Server restarts or Render Free idle spin-downs (after 15 minutes of inactivity) clear active room states.
+## ⚠️ Architectural Scope & Principles
+- **Privacy First & Zero Storage**: Ephemeral, zero-database architecture intentionally keeps room metadata strictly in memory. File data never touches the signaling server.
+- **NAT Traversal & TURN**: Connects directly via LAN or STUN whenever possible. When symmetric NAT or firewall conditions exist, falls back to TURN relay if configured in environment variables.
 - **Strict Two Devices Per Room**: QuickDrop pairs exactly 2 devices per room. Reconnecting or adding a third device is intentionally rejected. If a connection drops, a new room must be created.

@@ -8,9 +8,66 @@ import { FileTransferManager } from '../services/fileTransfer.js';
  */
 export function useFileTransfer({ peerConnection }) {
   const [transfers, setTransfers] = useState([]);
+  const [isWakeLockActive, setIsWakeLockActive] = useState(false);
   const managerRef = useRef(null);
   const sendQueueRef = useRef([]);
   const isSendingRef = useRef(false);
+  const wakeLockRef = useRef(null);
+
+  // Screen Wake Lock API: Keep phone screen awake during active file transfers
+  useEffect(() => {
+    const hasActiveTransfers = transfers.some((t) => t.status === 'transferring');
+
+    const requestWakeLock = async () => {
+      if (typeof window === 'undefined' || !('wakeLock' in navigator)) return;
+      try {
+        if (!wakeLockRef.current) {
+          const sentinel = await navigator.wakeLock.request('screen');
+          wakeLockRef.current = sentinel;
+          setIsWakeLockActive(true);
+
+          sentinel.addEventListener('release', () => {
+            wakeLockRef.current = null;
+            setIsWakeLockActive(false);
+          });
+        }
+      } catch (err) {
+        // Wake locks can be denied (e.g. low battery mode or tab minimized)
+        console.warn('Screen WakeLock could not be acquired:', err);
+      }
+    };
+
+    const releaseWakeLock = async () => {
+      if (wakeLockRef.current) {
+        try {
+          await wakeLockRef.current.release();
+        } catch {
+          // ignore
+        }
+        wakeLockRef.current = null;
+        setIsWakeLockActive(false);
+      }
+    };
+
+    if (hasActiveTransfers) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && hasActiveTransfers) {
+        requestWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      releaseWakeLock();
+    };
+  }, [transfers]);
 
   // Initialize FileTransferManager when peerConnection is ready
   useEffect(() => {
@@ -181,6 +238,7 @@ export function useFileTransfer({ peerConnection }) {
   return {
     transfers,
     queueFiles,
-    cancelTransfer
+    cancelTransfer,
+    isWakeLockActive
   };
 }

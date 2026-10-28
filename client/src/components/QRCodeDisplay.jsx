@@ -111,17 +111,37 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
           Scan this QR code with an Android phone or copy the invitation link below.
         </p>
 
-        {/* Copy Link Input Group */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        {/* Copy / Share Link Input Group */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
             readOnly
             value={invitationUrl}
             className="text-input"
-            style={{ fontSize: '0.85rem', fontFamily: 'var(--font-mono)' }}
+            style={{ fontSize: '0.85rem', fontFamily: 'var(--font-mono)', flex: '1 1 200px' }}
             onFocus={(e) => e.target.select()}
           />
           <CopyButton text={invitationUrl} label="Copy Link" successLabel="Copied!" />
+          {typeof navigator !== 'undefined' && typeof navigator.share === 'function' && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ minHeight: '38px', padding: '8px 14px', fontSize: '0.85rem' }}
+              onClick={async () => {
+                try {
+                  await navigator.share({
+                    title: 'Join QuickDrop Room',
+                    text: 'Connect with me on QuickDrop to transfer text and files peer-to-peer:',
+                    url: invitationUrl
+                  });
+                } catch {
+                  // User dismissed share dialog
+                }
+              }}
+            >
+              📲 Share
+            </button>
+          )}
         </div>
 
         {/* Wi-Fi note for localhost testing */}

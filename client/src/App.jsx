@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSignaling } from './hooks/useSignaling.js';
 import { useWebRTC } from './hooks/useWebRTC.js';
 import { useFileTransfer } from './hooks/useFileTransfer.js';
@@ -9,6 +9,7 @@ import { ErrorMessage } from './components/ErrorMessage.jsx';
 import { parseInvitationFromUrl } from './utils/roomUtils.js';
 
 export function App() {
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
   const {
     signalingClient,
     connectionStatus,
@@ -49,10 +50,40 @@ export function App() {
   const {
     transfers,
     queueFiles,
-    cancelTransfer
+    cancelTransfer,
+    isWakeLockActive
   } = useFileTransfer({
     peerConnection
   });
+
+  // PWA beforeinstallprompt handler
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setDeferredInstallPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const choiceResult = await deferredInstallPrompt.userChoice;
+    if (choiceResult && choiceResult.outcome === 'accepted') {
+      setDeferredInstallPrompt(null);
+    }
+  };
 
   // Check URL on initial load for invitation link (#token=...)
   useEffect(() => {
@@ -98,6 +129,23 @@ export function App() {
           </a>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {deferredInstallPrompt && (
+              <button
+                type="button"
+                onClick={handleInstallApp}
+                className="btn btn-secondary"
+                style={{
+                  minHeight: '28px',
+                  padding: '3px 10px',
+                  fontSize: '0.75rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                📥 Install
+              </button>
+            )}
             <span
               style={{
                 fontSize: '0.75rem',
@@ -172,6 +220,7 @@ export function App() {
             connectionType={connectionType}
             connectionStats={connectionStats}
             transfers={transfers}
+            isWakeLockActive={isWakeLockActive}
             onFilesSelected={queueFiles}
             onCancelTransfer={cancelTransfer}
           />

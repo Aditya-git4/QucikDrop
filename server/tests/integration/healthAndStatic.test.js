@@ -47,4 +47,17 @@ describe('HTTP Endpoints & Health Check', () => {
     const text = await res.text();
     assert.ok(text.includes('QuickDrop'));
   });
+
+  it('serves PWA manifest.json and sw.js correctly', async () => {
+    const manifestRes = await fetch(`${baseUrl}/manifest.json`);
+    assert.equal(manifestRes.status, 200);
+    const manifest = await manifestRes.json();
+    assert.equal(manifest.short_name, 'QuickDrop');
+    assert.ok(manifest.icons.length >= 2);
+
+    const swRes = await fetch(`${baseUrl}/sw.js`);
+    assert.equal(swRes.status, 200);
+    const swText = await swRes.text();
+    assert.ok(swText.includes('quickdrop-shell-v1'));
+  });
 });

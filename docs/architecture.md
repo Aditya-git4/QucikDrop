@@ -140,3 +140,27 @@ QuickDrop is a temporary, privacy-conscious peer-to-peer text and file sharing a
 - **Memory Batching**: Received chunks are compacted into native `Blob` parts every 32 slices (512 KiB). Native blobs reside outside of the V8 JavaScript heap, preventing heap exhaustion.
 - **In-Memory Threshold Limit**: Browsers without direct disk streaming (e.g. mobile Chrome) enforce a safe `MEMORY_TRANSFER_LIMIT` of 200 MB to prevent mobile OS tab terminations.
 - **Streaming Destination**: Where supported (e.g. desktop Chrome via File System Access API), files can stream directly to disk destinations.
+
+---
+
+## 5. Security Hardening & Dead Connection Reaping (Milestone 4)
+- **Hard Maximum Room Lifetime (`maxRoomLifetimeMs`)**: Enforces a strict 1-hour cap on room duration, preventing indefinitely active sessions.
+- **Generational Identifiers**: Atomic generation counters prevent stale cleanup timers from invalidating newer room instances.
+- **Zombie Socket Reaping**: Server issues active 30-second ping/pong heartbeats. Sockets failing to reply within the grace period are terminated, freeing resources from disconnected or backgrounded mobile devices.
+- **Exponential Reconnection**: Clients reconnect with bounded exponential backoff (1s, 2s, 4s; max 3 attempts) without aggressive hammering.
+
+---
+
+## 6. Single-Origin Cloud Deployment (Milestone 5)
+- **Unified Service**: Single Node.js Express process serves the compiled React frontend, handles `/health`, and hosts the `/ws` WebSocket endpoint.
+- **Automatic Same-Origin Host Validation**: Handshake validates `Origin` against the incoming `Host` header (`requestHost`), enabling zero-config deployment to Render Free Web Service (`https://<service>.onrender.com`) without hardcoded URLs.
+- **Render Blueprint (`render.yaml`)**: Declarative infrastructure-as-code configuration for 1-click cloud provisioning.
+
+---
+
+## 7. TURN Relay & PWA Integration (Milestones 6 & 7)
+- **Authenticated Ephemeral TURN (`iceServers.js`)**: Dynamically signs short-lived HMAC-SHA1 tokens (RFC 5766 / Coturn) for authenticated peers, preventing unauthorized bandwidth consumption and keeping the root `TURN_SECRET` strictly on the server.
+- **Real-Time Connection Type Detection**: Inspects active WebRTC candidate pairs (`stats` API / `selectedCandidatePair`) to surface whether the session is operating via `⚡ P2P Direct (LAN)`, `⚡ P2P Direct (STUN)`, or `🔄 Relayed (TURN)` with live round-trip latency.
+- **Screen Wake Lock API**: Holds a screen wake lock (`navigator.wakeLock`) during in-progress file transfers so mobile screens do not time out and terminate the WebRTC connection.
+- **Web Share API**: Native OS sharing dialog on mobile (`navigator.share`) for 1-tap invitation link distribution.
+- **Progressive Web App**: Offline shell caching via `sw.js` and `manifest.json` enabling home-screen installability on Android, iOS, and desktop.

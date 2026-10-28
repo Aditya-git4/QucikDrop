@@ -76,6 +76,14 @@ QuickDrop is designed with a defense-in-depth security model to ensure that even
   - Progress advances to 100% only after cryptographic hash verification succeeds.
   - Files failing hash comparison or byte count checks are immediately destroyed and never presented to the user.
 
+### 1.10 Ephemeral TURN Credential Isolation
+- **Threat**: Root TURN credentials or API secrets leak to the client browser, allowing malicious actors to exploit relay bandwidth.
+- **Mitigation**:
+  - The server utilizes RFC 5766 / Coturn HMAC-SHA1 ephemeral credential signing (`generateEphemeralCredentials`).
+  - Root `TURN_SECRET` never leaves the server environment.
+  - Clients receive only short-lived tokens bound to their specific peer ID and expiration timestamp.
+  - ICE credentials are delivered exclusively across authenticated signaling messages (`room:created` and `room:joined`). Unauthenticated visitors cannot obtain TURN credentials.
+
 ---
 
 ## 2. Privacy & Data Retention

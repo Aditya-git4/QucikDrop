@@ -47,6 +47,7 @@ export function Room({
   connectionType = 'unknown',
   connectionStats = null,
   transfers = [],
+  isWakeLockActive = false,
   onFilesSelected = () => {},
   onCancelTransfer = () => {}
 }) {
@@ -122,6 +123,20 @@ export function Room({
               }}
             >
               {connectionStats.rtt}ms
+            </span>
+          )}
+          {isWakeLockActive && (
+            <span
+              className="badge"
+              style={{
+                fontSize: '0.75rem',
+                backgroundColor: 'var(--color-primary-light)',
+                color: 'var(--color-primary)',
+                borderColor: 'var(--color-primary)'
+              }}
+              title="Screen Wake Lock is active: your screen will not turn off during file transfers"
+            >
+              🔆 Screen Awake
             </span>
           )}
         </div>
