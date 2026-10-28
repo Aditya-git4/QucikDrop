@@ -27,6 +27,22 @@ export function useWebRTC({
   const [connectionStats, setConnectionStats] = useState(null);
   const [p2pMessages, setP2pMessages] = useState([]);
 
+  const isOwnerRef = useRef(isOwner);
+  const peerDeviceNameRef = useRef(peerDeviceName);
+  const myDeviceNameRef = useRef(myDeviceName);
+
+  useEffect(() => {
+    isOwnerRef.current = isOwner;
+  }, [isOwner]);
+
+  useEffect(() => {
+    peerDeviceNameRef.current = peerDeviceName;
+  }, [peerDeviceName]);
+
+  useEffect(() => {
+    myDeviceNameRef.current = myDeviceName;
+  }, [myDeviceName]);
+
   const pcManagerRef = useRef(null);
 
   if (!pcManagerRef.current) {
@@ -64,6 +80,12 @@ export function useWebRTC({
     const handleStatusChange = (status) => {
       if (status === 'connected') {
         setWebrtcStatus('connected');
+        if (
+          pcManager.controlChannel?.readyState === 'open' ||
+          pcManager.fileChannel?.readyState === 'open'
+        ) {
+          setIsP2PConnected(true);
+        }
       } else if (status === 'failed') {
         setWebrtcStatus('failed');
         setIsP2PConnected(false);
@@ -103,7 +125,7 @@ export function useWebRTC({
           {
             id: msg.clientMessageId || `${Date.now()}-${Math.random()}`,
             text: msg.text,
-            deviceName: msg.deviceName || peerDeviceName || 'Remote Peer',
+            deviceName: msg.deviceName || peerDeviceNameRef.current || 'Remote Peer',
             sentAt: msg.sentAt || Date.now(),
             isMine: false
           }
@@ -120,7 +142,7 @@ export function useWebRTC({
 
     // 5. Host initiates offer when Guest joins
     const handlePeerJoined = async () => {
-      if (isOwner) {
+      if (isOwnerRef.current) {
         setWebrtcStatus('connecting');
         try {
           const offer = await pcManager.createOffer();
@@ -138,7 +160,7 @@ export function useWebRTC({
 
     // 6. Guest receives offer -> generates and sends answer
     const handleOffer = async (msg) => {
-      if (!isOwner) {
+      if (!isOwnerRef.current) {
         setWebrtcStatus('connecting');
         try {
           const answer = await pcManager.handleOffer(msg.payload);
@@ -156,7 +178,7 @@ export function useWebRTC({
 
     // 7. Host receives answer
     const handleAnswer = async (msg) => {
-      if (isOwner) {
+      if (isOwnerRef.current) {
         try {
           await pcManager.handleAnswer(msg.payload);
         } catch (err) {
@@ -196,7 +218,7 @@ export function useWebRTC({
       setConnectionType('unknown');
       setConnectionStats(null);
     };
-  }, [signalingClient, isOwner, peerDeviceName, pcManager]);
+  }, [signalingClient, pcManager]);
 
   /** Send chat text directly over WebRTC control channel */
   const sendP2PText = useCallback((text) => {

@@ -137,6 +137,7 @@ export class PeerConnectionManager {
     if (state === 'connected') {
       this.startStatsPolling();
       this.updateConnectionStats();
+      this.checkReadyState();
     } else if (['disconnected', 'failed', 'closed'].includes(state)) {
       this.stopStatsPolling();
       this.connectionType = 'unknown';
@@ -204,12 +205,10 @@ export class PeerConnectionManager {
   }
 
   checkReadyState() {
-    if (
-      this.controlChannel &&
-      this.controlChannel.readyState === 'open' &&
-      this.fileChannel &&
-      this.fileChannel.readyState === 'open'
-    ) {
+    const isControlOpen = this.controlChannel && this.controlChannel.readyState === 'open';
+    const isFileOpen = this.fileChannel && this.fileChannel.readyState === 'open';
+
+    if (isControlOpen || isFileOpen) {
       this.emit('ready');
       this.startStatsPolling();
       this.updateConnectionStats();
