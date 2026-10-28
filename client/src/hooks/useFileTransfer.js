@@ -70,6 +70,36 @@ export function useFileTransfer({ peerConnection }) {
     };
   }, [transfers]);
 
+  /** Process the next file in the sequential send queue */
+  const processSendQueue = useCallback(async () => {
+    if (isSendingRef.current || sendQueueRef.current.length === 0 || !managerRef.current) {
+      return;
+    }
+
+    const pc = managerRef.current.peerConnection;
+    if (!pc?.fileChannel || pc.fileChannel.readyState !== 'open') {
+      return;
+    }
+
+    isSendingRef.current = true;
+    const nextItem = sendQueueRef.current.shift();
+    const nextFile = nextItem?.file || nextItem;
+    const tempId = nextItem?.tempId;
+
+    try {
+      if (tempId) {
+        setTransfers((prev) => prev.filter((t) => t.transferId !== tempId));
+      }
+      await managerRef.current.sendFile(nextFile);
+    } catch (err) {
+      console.error('File send error:', err);
+    } finally {
+      isSendingRef.current = false;
+      // Process next item if any
+      processSendQueue();
+    }
+  }, []);
+
   // Initialize FileTransferManager when peerConnection is ready
   useEffect(() => {
     if (!peerConnection) return;
@@ -208,36 +238,6 @@ export function useFileTransfer({ peerConnection }) {
       managerRef.current = null;
     };
   }, [peerConnection, processSendQueue]);
-
-  /** Process the next file in the sequential send queue */
-  const processSendQueue = useCallback(async () => {
-    if (isSendingRef.current || sendQueueRef.current.length === 0 || !managerRef.current) {
-      return;
-    }
-
-    const pc = managerRef.current.peerConnection;
-    if (!pc?.fileChannel || pc.fileChannel.readyState !== 'open') {
-      return;
-    }
-
-    isSendingRef.current = true;
-    const nextItem = sendQueueRef.current.shift();
-    const nextFile = nextItem?.file || nextItem;
-    const tempId = nextItem?.tempId;
-
-    try {
-      if (tempId) {
-        setTransfers((prev) => prev.filter((t) => t.transferId !== tempId));
-      }
-      await managerRef.current.sendFile(nextFile);
-    } catch (err) {
-      console.error('File send error:', err);
-    } finally {
-      isSendingRef.current = false;
-      // Process next item if any
-      processSendQueue();
-    }
-  }, []);
 
   /** Queue multiple files for sending (works immediately, auto-beams upon P2P connect) */
   const queueFiles = useCallback(
