@@ -68,6 +68,10 @@ export function buildInvitationUrl(roomId, joinToken) {
  * @returns {string}
  */
 export function getWebSocketUrl() {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_WS_URL) {
+    return import.meta.env.VITE_WS_URL;
+  }
+
   if (typeof window === 'undefined') return 'ws://localhost:5000/ws';
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
