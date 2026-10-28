@@ -92,6 +92,7 @@ export function App() {
     transfers,
     queueFiles,
     cancelTransfer,
+    clearCompleted,
     isWakeLockActive
   } = useFileTransfer({
     peerConnection
@@ -278,6 +279,7 @@ export function App() {
               isWakeLockActive={isWakeLockActive}
               onFilesSelected={queueFiles}
               onCancelTransfer={cancelTransfer}
+              onClearCompleted={clearCompleted}
             />
           </ErrorBoundary>
         )}

@@ -242,10 +242,16 @@ export function useFileTransfer({ peerConnection }) {
     }
   }, []);
 
+  /** Clear completed, cancelled, and errored transfers from the queue */
+  const clearCompleted = useCallback(() => {
+    setTransfers((prev) => prev.filter((t) => t.status === 'transferring' || t.status === 'queued'));
+  }, []);
+
   return {
     transfers,
     queueFiles,
     cancelTransfer,
+    clearCompleted,
     isWakeLockActive
   };
 }

@@ -11,7 +11,7 @@ import { hapticTap, playSuccessSound } from '../utils/soundEffects.js';
  *   onCancelTransfer: (id: string) => void
  * }} props
  */
-export function TransferQueue({ transfers, onCancelTransfer }) {
+export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = null }) {
   const [isZipping, setIsZipping] = useState(false);
   const [zipPercent, setZipPercent] = useState(0);
 
@@ -19,6 +19,10 @@ export function TransferQueue({ transfers, onCancelTransfer }) {
 
   const completedReceived = transfers.filter(
     (t) => t.direction === 'receive' && t.status === 'completed' && t.downloadUrl
+  );
+
+  const hasFinishedTransfers = transfers.some(
+    (t) => t.status === 'completed' || t.status === 'cancelled' || t.status === 'error'
   );
 
   const handleDownloadZip = async () => {
@@ -81,26 +85,48 @@ export function TransferQueue({ transfers, onCancelTransfer }) {
           </span>
         </div>
 
-        {/* 1-Click Download All as ZIP (visible when 2+ received files completed) */}
-        {completedReceived.length >= 2 && (
-          <button
-            type="button"
-            onClick={handleDownloadZip}
-            disabled={isZipping}
-            className="btn btn-secondary animate-entrance"
-            style={{
-              padding: '5px 12px',
-              fontSize: '0.78rem',
-              minHeight: '30px',
-              background: 'rgba(228, 253, 151, 0.15)',
-              borderColor: 'rgba(228, 253, 151, 0.4)',
-              color: 'var(--color-lime)'
-            }}
-            title="Package all received files into a single .zip download"
-          >
-            {isZipping ? `📦 Zipping ${zipPercent}%...` : `📦 Download All as ZIP (${completedReceived.length})`}
-          </button>
-        )}
+        {/* Action Buttons: ZIP & Clear Finished */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {completedReceived.length >= 2 && (
+            <button
+              type="button"
+              onClick={handleDownloadZip}
+              disabled={isZipping}
+              className="btn btn-secondary animate-entrance"
+              style={{
+                padding: '4px 12px',
+                fontSize: '0.78rem',
+                minHeight: '28px',
+                background: 'rgba(228, 253, 151, 0.15)',
+                borderColor: 'rgba(228, 253, 151, 0.4)',
+                color: 'var(--color-lime)'
+              }}
+              title="Package all received files into a single .zip download"
+            >
+              {isZipping ? `📦 Zipping ${zipPercent}%...` : `📦 Download All (${completedReceived.length}) .ZIP`}
+            </button>
+          )}
+
+          {hasFinishedTransfers && onClearCompleted && (
+            <button
+              type="button"
+              onClick={() => {
+                hapticTap();
+                onClearCompleted();
+              }}
+              className="btn btn-secondary animate-entrance"
+              style={{
+                padding: '4px 10px',
+                fontSize: '0.74rem',
+                minHeight: '28px',
+                color: 'var(--color-text-subtle)'
+              }}
+              title="Clear completed and cancelled files from the list"
+            >
+              Clear Finished
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

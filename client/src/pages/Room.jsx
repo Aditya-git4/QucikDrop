@@ -31,7 +31,8 @@ export function Room({
   transfers = [],
   isWakeLockActive = false,
   onFilesSelected = () => {},
-  onCancelTransfer = () => {}
+  onCancelTransfer = () => {},
+  onClearCompleted = () => {}
 }) {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [mobileTab, setMobileTab] = useState('files'); // 'files' | 'chat' | 'info'
@@ -470,6 +471,7 @@ export function Room({
                 <TransferQueue
                   transfers={transfers}
                   onCancelTransfer={onCancelTransfer}
+                  onClearCompleted={onClearCompleted}
                 />
               </div>
             </div>
