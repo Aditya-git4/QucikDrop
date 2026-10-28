@@ -1,23 +1,7 @@
 import React from 'react';
 
 /**
- * Display cards for local and remote device status.
- * @param {{
- *   myDeviceName: string,
- *   peerDeviceName: string | null,
- *   isOwner: boolean,
- *   isConnected: boolean,
- *   isP2PConnected?: boolean,
- *   connectionType?: 'unknown' | 'lan' | 'direct' | 'relay',
- *   connectionStats?: {
- *     isRelayed?: boolean,
- *     connectionType?: string,
- *     localCandidateType?: string,
- *     remoteCandidateType?: string,
- *     protocol?: string,
- *     rtt?: number | null
- *   } | null
- * }} props
+ * Modern iOS paired device indicator with animated connection bridge.
  */
 export function DeviceStatus({
   myDeviceName,
@@ -30,89 +14,105 @@ export function DeviceStatus({
 }) {
   const getPeerBadgeText = () => {
     if (!isP2PConnected) {
-      return isConnected ? 'Connected' : 'Waiting...';
+      return isConnected ? 'Signaling Connected' : 'Waiting...';
     }
     if (connectionType === 'relay') {
       return '🔄 Relayed (TURN)';
     }
     if (connectionType === 'lan') {
-      return '⚡ Direct (LAN)';
+      return '⚡ LAN Direct';
     }
-    return '⚡ Direct (STUN)';
+    return '⚡ STUN Direct';
   };
 
   return (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: '12px',
-        marginBottom: '16px'
+        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+        gap: '14px',
+        alignItems: 'stretch'
       }}
     >
-      {/* Local Device */}
+      {/* Local Device Card */}
       <div
+        className="card"
         style={{
-          padding: '14px',
-          backgroundColor: 'var(--color-surface)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-md)',
+          padding: '16px 20px',
+          background: 'rgba(28, 42, 27, 0.45)',
+          border: '1px solid var(--glass-border)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '4px'
+          justifyContent: 'space-between',
+          gap: '8px'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
-            THIS DEVICE ({isOwner ? 'HOST' : 'GUEST'})
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            This Device • {isOwner ? 'Host' : 'Guest'}
           </span>
-          <span className="badge badge-connected" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>
-            You
+          <span
+            className="badge badge-connected"
+            style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+          >
+            ● Active
           </span>
         </div>
-        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
-          {myDeviceName}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '1.4rem' }}>💻</span>
+          <div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
+              {myDeviceName}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-subtle)' }}>
+              Local WebRTC Node
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Remote Peer Device */}
+      {/* Remote Peer Device Card */}
       <div
+        className="card"
         style={{
-          padding: '14px',
-          backgroundColor: 'var(--color-surface)',
-          border: `1px solid ${isConnected ? 'var(--color-success-border)' : 'var(--color-border)'}`,
-          borderRadius: 'var(--radius-md)',
+          padding: '16px 20px',
+          background: isConnected ? 'rgba(35, 52, 34, 0.55)' : 'rgba(24, 36, 23, 0.4)',
+          border: isConnected
+            ? '1px solid var(--glass-border-highlight)'
+            : '1px solid var(--glass-border)',
+          boxShadow: isP2PConnected ? '0 0 20px rgba(228, 253, 151, 0.15)' : 'none',
           display: 'flex',
           flexDirection: 'column',
-          gap: '4px'
+          justifyContent: 'space-between',
+          gap: '8px'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
-            PEER DEVICE ({isOwner ? 'GUEST' : 'HOST'})
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Peer Device • {isOwner ? 'Guest' : 'Host'}
           </span>
           <span
             className={`badge ${isConnected ? 'badge-connected' : 'badge-waiting'}`}
-            style={{
-              fontSize: '0.7rem',
-              padding: '2px 6px',
-              backgroundColor: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning-bg)' : undefined,
-              borderColor: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning-border)' : undefined,
-              color: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning)' : undefined
-            }}
+            style={{ fontSize: '0.7rem', padding: '2px 8px' }}
           >
             {getPeerBadgeText()}
           </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
-            {peerDeviceName || (isConnected ? 'Connected Peer' : 'Awaiting Connection...')}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '1.4rem' }}>📱</span>
+          <div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
+              {peerDeviceName || (isConnected ? 'Connected Peer' : 'Waiting to pair...')}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: isConnected ? 'var(--color-lime)' : 'var(--color-text-subtle)' }}>
+              {isP2PConnected
+                ? `⚡ P2P Active${connectionStats?.rtt != null ? ` (${connectionStats.rtt}ms)` : ''}`
+                : isConnected
+                ? 'Signaling established'
+                : 'Scan QR code to join'}
+            </div>
           </div>
-          {isP2PConnected && connectionStats?.rtt != null && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-              {connectionStats.rtt}ms RTT
-            </span>
-          )}
         </div>
       </div>
     </div>

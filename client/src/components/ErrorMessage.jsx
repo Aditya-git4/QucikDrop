@@ -1,7 +1,7 @@
 import React from 'react';
 
 /**
- * Accessible error message display component.
+ * Modern iOS glassmorphic error banner.
  * @param {{ message: string | null, code?: string | null, onDismiss?: () => void }} props
  */
 export function ErrorMessage({ message, code, onDismiss }) {
@@ -10,28 +10,33 @@ export function ErrorMessage({ message, code, onDismiss }) {
   return (
     <div
       role="alert"
+      className="animate-entrance"
       style={{
-        padding: '14px 16px',
-        backgroundColor: 'var(--color-danger-bg)',
-        border: '1px solid var(--color-danger-border)',
+        padding: '14px 18px',
+        backgroundColor: 'rgba(248, 113, 113, 0.16)',
+        border: '1px solid rgba(248, 113, 113, 0.45)',
         borderRadius: 'var(--radius-md)',
-        color: 'var(--color-danger)',
+        color: '#fca5a5',
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
         gap: '12px',
-        marginBottom: '16px'
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)'
       }}
     >
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: '1.2rem', lineHeight: 1 }}>⚠️</span>
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+        <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>⚠️</span>
         <div>
           {code && (
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', opacity: 0.85 }}>
+            <div style={{ fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase', opacity: 0.9, letterSpacing: '0.04em' }}>
               Error: {code}
             </div>
           )}
-          <div style={{ fontSize: '0.9rem', marginTop: code ? '2px' : 0 }}>{message}</div>
+          <div style={{ fontSize: '0.9rem', marginTop: code ? '2px' : 0, color: '#fee2e2', fontWeight: 500 }}>
+            {message}
+          </div>
         </div>
       </div>
       {onDismiss && (
@@ -45,7 +50,8 @@ export function ErrorMessage({ message, code, onDismiss }) {
             cursor: 'pointer',
             padding: '4px',
             fontSize: '1rem',
-            lineHeight: 1
+            lineHeight: 1,
+            opacity: 0.8
           }}
           aria-label="Dismiss error"
         >

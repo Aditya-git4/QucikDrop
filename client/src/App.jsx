@@ -104,7 +104,14 @@ export function App() {
   const isInRoomView = roomStatus !== 'idle';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', position: 'relative' }}>
+      {/* Ambient Glassmorphic Refraction Orbs */}
+      <div className="ambient-glow-canvas" aria-hidden="true">
+        <div className="ambient-orb ambient-orb-1" />
+        <div className="ambient-orb ambient-orb-2" />
+        <div className="ambient-orb ambient-orb-3" />
+      </div>
+
       {/* Top Application Header */}
       <header className="app-header">
         <div className="header-content">
@@ -116,65 +123,71 @@ export function App() {
             }}
             className="brand-link"
           >
-            <span>⚡ QuickDrop</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ color: 'var(--color-lime)', textShadow: '0 0 12px rgba(228, 253, 151, 0.4)' }}>⚡</span>
+              <span>QuickDrop</span>
+            </span>
             <span className="brand-badge">
               {isP2PConnected
                 ? connectionType === 'relay'
-                  ? 'WebRTC Relayed (TURN)'
+                  ? 'Relayed'
                   : connectionType === 'lan'
-                  ? 'WebRTC P2P (LAN)'
-                  : 'WebRTC P2P Direct'
-                : 'Signaling'}
+                  ? 'LAN P2P'
+                  : 'Direct P2P'
+                : 'P2P Ready'}
             </span>
           </a>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             {deferredInstallPrompt && (
               <button
                 type="button"
                 onClick={handleInstallApp}
                 className="btn btn-secondary"
                 style={{
-                  minHeight: '28px',
-                  padding: '3px 10px',
-                  fontSize: '0.75rem',
+                  minHeight: '32px',
+                  padding: '4px 12px',
+                  fontSize: '0.78rem',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px'
+                  gap: '6px',
+                  borderRadius: 'var(--radius-full)'
                 }}
               >
-                📥 Install
+                <span>📥</span>
+                <span>Install</span>
               </button>
             )}
-            <span
-              style={{
-                fontSize: '0.75rem',
-                color: 'var(--color-text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
-            >
+
+            {/* iOS Dynamic Island Status Pill */}
+            <div className="dynamic-island-pill">
               <span
                 style={{
-                  width: '6px',
-                  height: '6px',
+                  width: '8px',
+                  height: '8px',
                   borderRadius: '50%',
                   backgroundColor: isP2PConnected
-                    ? 'var(--color-success)'
+                    ? 'var(--color-lime)'
                     : connectionStatus === 'connected'
                     ? 'var(--color-warning)'
-                    : 'var(--color-danger)'
+                    : 'var(--color-danger)',
+                  boxShadow: isP2PConnected
+                    ? '0 0 10px rgba(228, 253, 151, 0.8)'
+                    : connectionStatus === 'connected'
+                    ? '0 0 8px rgba(250, 204, 21, 0.6)'
+                    : 'none'
                 }}
               />
-              {isP2PConnected
-                ? 'P2P Live'
-                : connectionStatus === 'connected'
-                ? 'Signaling Active'
-                : connectionStatus === 'connecting'
-                ? 'Connecting...'
-                : 'Offline'}
-            </span>
+              <span style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--color-text-main)', letterSpacing: '0.01em' }}>
+                {isP2PConnected
+                  ? 'P2P Direct'
+                  : connectionStatus === 'connected'
+                  ? 'Signaling Active'
+                  : connectionStatus === 'connecting'
+                  ? 'Connecting...'
+                  : 'Offline'}
+              </span>
+            </div>
           </div>
         </div>
       </header>

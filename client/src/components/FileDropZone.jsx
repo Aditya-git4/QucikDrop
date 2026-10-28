@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 
 /**
- * Drag-and-drop file selection area with accessible button trigger.
+ * Modern iOS glassmorphic drag-and-drop file selection zone with tactile feedback.
  * @param {{
  *   onFilesSelected: (files: FileList) => void,
  *   disabled?: boolean
@@ -35,7 +35,7 @@ export function FileDropZone({ onFilesSelected, disabled = false }) {
   const handleFileInputChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
       onFilesSelected(e.target.files);
-      e.target.value = ''; // Reset input so same file can be selected again if needed
+      e.target.value = ''; // Reset input so same file can be selected again
     }
   };
 
@@ -49,21 +49,27 @@ export function FileDropZone({ onFilesSelected, disabled = false }) {
       }}
       style={{
         border: `2px dashed ${
-          isDragOver ? 'var(--color-primary)' : 'var(--color-border)'
+          isDragOver ? 'var(--color-lime)' : 'rgba(228, 253, 151, 0.25)'
         }`,
         borderRadius: 'var(--radius-lg)',
-        padding: '24px 16px',
+        padding: '32px 20px',
         textAlign: 'center',
-        backgroundColor: isDragOver
-          ? 'var(--color-primary-light)'
-          : 'var(--color-surface)',
+        background: isDragOver
+          ? 'rgba(228, 253, 151, 0.16)'
+          : 'rgba(20, 30, 19, 0.55)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
         cursor: disabled ? 'not-allowed' : 'pointer',
-        transition: 'all 0.15s ease',
+        boxShadow: isDragOver ? 'var(--glass-shadow-glow)' : 'var(--glass-shadow-sm)',
+        transition: 'all 0.25s var(--spring-bounce)',
+        transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: '8px',
-        opacity: disabled ? 0.6 : 1
+        gap: '12px',
+        opacity: disabled ? 0.5 : 1,
+        userSelect: 'none',
+        WebkitUserSelect: 'none'
       }}
       role="button"
       tabIndex={disabled ? -1 : 0}
@@ -84,19 +90,52 @@ export function FileDropZone({ onFilesSelected, disabled = false }) {
         disabled={disabled}
       />
 
-      <div style={{ fontSize: '2rem', lineHeight: 1 }}>📁</div>
+      <div
+        style={{
+          width: '56px',
+          height: '56px',
+          borderRadius: 'var(--radius-md)',
+          background: isDragOver ? 'var(--color-lime)' : 'var(--color-lime-dim)',
+          color: isDragOver ? 'var(--color-lime-text)' : 'var(--color-lime)',
+          border: '1px solid rgba(228, 253, 151, 0.3)',
+          boxShadow: isDragOver ? '0 0 24px rgba(228, 253, 151, 0.6)' : 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.75rem',
+          transition: 'all 0.2s var(--spring-snappy)'
+        }}
+      >
+        {isDragOver ? '📥' : '📁'}
+      </div>
+
       <div>
-        <p style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--color-text-main)' }}>
+        <p style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--color-text-main)', marginBottom: '4px' }}>
           {disabled
             ? 'Connect via WebRTC to share files'
             : isDragOver
-            ? 'Drop files here to send'
-            : 'Click to select or drag files here'}
+            ? 'Release to Send Immediately'
+            : 'Click to Select or Drop Files'}
         </p>
-        <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-          Supports multiple files • Direct P2P transfer with zero server storage
+        <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
+          Direct peer-to-peer streaming • Zero server relay
         </p>
       </div>
+
+      {!disabled && (
+        <span
+          className="btn btn-primary"
+          style={{
+            padding: '8px 18px',
+            fontSize: '0.82rem',
+            minHeight: '34px',
+            marginTop: '4px',
+            pointerEvents: 'none'
+          }}
+        >
+          Browse Device Files
+        </span>
+      )}
     </div>
   );
 }

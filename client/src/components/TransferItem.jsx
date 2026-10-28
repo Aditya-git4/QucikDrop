@@ -4,7 +4,7 @@ import { formatBytes } from '../utils/formatBytes.js';
 import { triggerDownload } from '../utils/fileUtils.js';
 
 /**
- * Individual file transfer card.
+ * Modern iOS glassmorphic file transfer card.
  * @param {{
  *   transfer: {
  *     transferId: string,
@@ -15,7 +15,10 @@ import { triggerDownload } from '../utils/fileUtils.js';
  *     bytesTransferred: number,
  *     percent: number,
  *     speed: number,
- *     downloadUrl: string | null
+ *     downloadUrl: string | null,
+ *     fileHash?: string,
+ *     verified?: boolean,
+ *     errorMessage?: string
  *   },
  *   onCancel: (id: string) => void
  * }} props
@@ -29,24 +32,47 @@ export function TransferItem({ transfer, onCancel }) {
 
   return (
     <div
+      className="card animate-entrance"
       style={{
-        padding: '12px 14px',
-        backgroundColor: 'var(--color-surface)',
-        border: `1px solid ${isError ? 'var(--color-danger-border)' : 'var(--color-border)'}`,
+        padding: '16px',
+        backgroundColor: 'rgba(28, 42, 27, 0.45)',
+        border: `1px solid ${
+          isError
+            ? 'var(--color-danger-border)'
+            : isCompleted
+            ? 'var(--color-success-border)'
+            : 'var(--glass-border)'
+        }`,
         borderRadius: 'var(--radius-md)',
         display: 'flex',
         flexDirection: 'column',
-        gap: '8px'
+        gap: '12px',
+        boxShadow: 'var(--glass-shadow-sm)'
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-          <span style={{ fontSize: '1.25rem' }}>{isSend ? '📤' : '📥'}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+          <span
+            style={{
+              fontSize: '1.25rem',
+              width: '36px',
+              height: '36px',
+              borderRadius: 'var(--radius-sm)',
+              background: isCompleted ? 'var(--color-lime-dim)' : 'rgba(20, 30, 19, 0.6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '1px solid rgba(228, 253, 151, 0.2)'
+            }}
+          >
+            {isSend ? '📤' : '📥'}
+          </span>
+
           <div style={{ overflow: 'hidden' }}>
             <div
               style={{
-                fontSize: '0.9rem',
-                fontWeight: 600,
+                fontSize: '0.92rem',
+                fontWeight: 700,
                 color: 'var(--color-text-main)',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
@@ -56,10 +82,10 @@ export function TransferItem({ transfer, onCancel }) {
             >
               {transfer.fileName}
             </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+            <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)' }}>
               {formatBytes(transfer.fileSize)} • {isSend ? 'Sending to peer' : 'Receiving from peer'}
               {transfer.fileHash && (
-                <span style={{ marginLeft: '6px', fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}>
+                <span style={{ marginLeft: '6px', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-lime)' }}>
                   [SHA-256: {transfer.fileHash.slice(0, 8)}...]
                 </span>
               )}
@@ -71,7 +97,7 @@ export function TransferItem({ transfer, onCancel }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           {isCompleted && (
             <>
-              <span className="badge badge-connected" style={{ fontSize: '0.75rem' }}>
+              <span className="badge badge-connected" style={{ fontSize: '0.74rem' }}>
                 {transfer.verified ? '✓ Verified SHA-256' : '✓ Complete'}
               </span>
               {!isSend && transfer.downloadUrl && (
@@ -79,7 +105,7 @@ export function TransferItem({ transfer, onCancel }) {
                   type="button"
                   onClick={() => triggerDownload(transfer.downloadUrl, transfer.fileName)}
                   className="btn btn-primary"
-                  style={{ minHeight: '32px', padding: '4px 10px', fontSize: '0.8rem' }}
+                  style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.8rem' }}
                 >
                   💾 Save
                 </button>
@@ -88,13 +114,13 @@ export function TransferItem({ transfer, onCancel }) {
           )}
 
           {isCancelled && (
-            <span className="badge badge-error" style={{ fontSize: '0.75rem' }}>
+            <span className="badge badge-error" style={{ fontSize: '0.74rem' }}>
               ✕ Cancelled
             </span>
           )}
 
           {isError && (
-            <span className="badge badge-error" style={{ fontSize: '0.75rem' }}>
+            <span className="badge badge-error" style={{ fontSize: '0.74rem' }}>
               ✕ Failed
             </span>
           )}
@@ -104,7 +130,7 @@ export function TransferItem({ transfer, onCancel }) {
               type="button"
               onClick={() => onCancel(transfer.transferId)}
               className="btn btn-danger"
-              style={{ minHeight: '32px', padding: '4px 10px', fontSize: '0.8rem' }}
+              style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
             >
               Cancel
             </button>
@@ -119,7 +145,8 @@ export function TransferItem({ transfer, onCancel }) {
             fontSize: '0.8rem',
             color: 'var(--color-danger)',
             backgroundColor: 'var(--color-danger-bg)',
-            padding: '6px 10px',
+            border: '1px solid var(--color-danger-border)',
+            padding: '8px 12px',
             borderRadius: 'var(--radius-sm)'
           }}
         >

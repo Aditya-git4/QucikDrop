@@ -6,28 +6,8 @@ import { FileDropZone } from '../components/FileDropZone.jsx';
 import { TransferQueue } from '../components/TransferQueue.jsx';
 
 /**
- * Active room page handling waiting, connected, WebRTC P2P file & text sharing, and terminated states.
- * @param {{
- *   roomId: string,
- *   joinToken: string | null,
- *   roomStatus: 'waiting' | 'connected' | 'closed' | 'expired' | 'error',
- *   isOwner: boolean,
- *   myDeviceName: string,
- *   peerDeviceName: string | null,
- *   expiresAt: number | null,
- *   messages: any[],
- *   onSendMessage: (text: string) => void,
- *   onCloseRoom: () => void,
- *   onReset: () => void,
- *   errorMessage: string | null,
- *   isP2PConnected?: boolean,
- *   webrtcStatus?: string,
- *   connectionType?: 'unknown' | 'lan' | 'direct' | 'relay',
- *   connectionStats?: any,
- *   transfers?: any[],
- *   onFilesSelected?: (files: FileList) => void,
- *   onCancelTransfer?: (id: string) => void
- * }} props
+ * Modern iOS glassmorphic Room page handling waiting, connected, WebRTC P2P file & text sharing.
+ * Renders a unified side-by-side cockpit on desktop and an iOS segmented card on mobile.
  */
 export function Room({
   roomId,
@@ -52,6 +32,7 @@ export function Room({
   onCancelTransfer = () => {}
 }) {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [mobileTab, setMobileTab] = useState('files'); // 'files' | 'chat' | 'info'
 
   const isConnected = roomStatus === 'connected';
   const isTerminated = ['closed', 'expired', 'error'].includes(roomStatus);
@@ -68,8 +49,8 @@ export function Room({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Room Header Controls */}
+    <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Top Glass Room Header Bar */}
       <div
         className="card"
         style={{
@@ -78,20 +59,25 @@ export function Room({
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: '12px'
+          gap: '12px',
+          background: 'rgba(28, 42, 27, 0.55)',
+          border: '1px solid var(--glass-border-highlight)'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Room:
           </span>
           <code
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: '0.85rem',
-              backgroundColor: 'var(--color-surface-hover)',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)'
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              backgroundColor: 'rgba(18, 28, 17, 0.7)',
+              color: 'var(--color-lime)',
+              padding: '3px 10px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid rgba(228, 253, 151, 0.2)'
             }}
           >
             {roomId ? `${roomId.slice(0, 8)}...${roomId.slice(-6)}` : 'Active'}
@@ -106,35 +92,36 @@ export function Room({
                 ? 'badge-waiting'
                 : 'badge-closed'
             }`}
-            style={{
-              backgroundColor: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning-bg)' : undefined,
-              borderColor: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning-border)' : undefined,
-              color: isP2PConnected && connectionType === 'relay' ? 'var(--color-warning)' : undefined
-            }}
           >
             {getHeaderBadgeText()}
           </span>
+
           {isP2PConnected && connectionStats?.rtt != null && (
             <span
               style={{
-                fontSize: '0.75rem',
+                fontSize: '0.78rem',
                 color: 'var(--color-text-muted)',
-                fontFamily: 'var(--font-mono)'
+                fontFamily: 'var(--font-mono)',
+                background: 'rgba(228, 253, 151, 0.08)',
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid rgba(228, 253, 151, 0.15)'
               }}
             >
-              {connectionStats.rtt}ms
+              ⚡ {connectionStats.rtt}ms
             </span>
           )}
+
           {isWakeLockActive && (
             <span
               className="badge"
               style={{
-                fontSize: '0.75rem',
-                backgroundColor: 'var(--color-primary-light)',
-                color: 'var(--color-primary)',
-                borderColor: 'var(--color-primary)'
+                fontSize: '0.74rem',
+                backgroundColor: 'rgba(228, 253, 151, 0.12)',
+                color: 'var(--color-lime)',
+                border: '1px solid rgba(228, 253, 151, 0.25)'
               }}
-              title="Screen Wake Lock is active: your screen will not turn off during file transfers"
+              title="Screen Wake Lock is active"
             >
               🔆 Screen Awake
             </span>
@@ -146,12 +133,12 @@ export function Room({
           {!isTerminated ? (
             showCloseConfirm ? (
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--color-danger)' }}>End room?</span>
+                <span style={{ fontSize: '0.85rem', color: 'var(--color-danger)', fontWeight: 600 }}>End room?</span>
                 <button
                   type="button"
                   onClick={onCloseRoom}
                   className="btn btn-danger"
-                  style={{ minHeight: '36px', padding: '6px 12px', fontSize: '0.85rem' }}
+                  style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.82rem' }}
                 >
                   Yes, Close
                 </button>
@@ -159,7 +146,7 @@ export function Room({
                   type="button"
                   onClick={() => setShowCloseConfirm(false)}
                   className="btn btn-secondary"
-                  style={{ minHeight: '36px', padding: '6px 12px', fontSize: '0.85rem' }}
+                  style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.82rem' }}
                 >
                   Cancel
                 </button>
@@ -169,7 +156,7 @@ export function Room({
                 type="button"
                 onClick={() => setShowCloseConfirm(true)}
                 className="btn btn-secondary"
-                style={{ minHeight: '38px', padding: '8px 14px', fontSize: '0.85rem' }}
+                style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
               >
                 {isOwner ? 'Close Room' : 'Leave Room'}
               </button>
@@ -179,7 +166,7 @@ export function Room({
               type="button"
               onClick={onReset}
               className="btn btn-primary"
-              style={{ minHeight: '38px', padding: '8px 14px', fontSize: '0.85rem' }}
+              style={{ minHeight: '36px', padding: '8px 18px', fontSize: '0.85rem' }}
             >
               Start New Room
             </button>
@@ -187,7 +174,7 @@ export function Room({
         </div>
       </div>
 
-      {/* Device Status Bar */}
+      {/* Paired Device Status Pill Bar */}
       <DeviceStatus
         myDeviceName={myDeviceName}
         peerDeviceName={peerDeviceName}
@@ -204,18 +191,17 @@ export function Room({
           className="card"
           style={{
             textAlign: 'center',
-            padding: '32px 20px',
-            backgroundColor: 'var(--color-surface)',
-            border: '1px solid var(--color-border)'
+            padding: '36px 20px',
+            boxShadow: 'var(--glass-shadow-glow)'
           }}
         >
-          <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '10px' }}>
             {roomStatus === 'expired' ? '⏳' : '👋'}
           </div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '8px' }}>
+          <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
             {roomStatus === 'expired' ? 'Room Expired' : 'Room Ended'}
           </h2>
-          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem', maxWidth: '440px', margin: '0 auto 20px' }}>
+          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem', maxWidth: '440px', margin: '0 auto 24px', lineHeight: 1.55 }}>
             {errorMessage ||
               (roomStatus === 'expired'
                 ? 'This temporary room exceeded its lifetime limit and has expired.'
@@ -225,16 +211,16 @@ export function Room({
             type="button"
             onClick={onReset}
             className="btn btn-primary"
-            style={{ padding: '10px 24px' }}
+            style={{ padding: '12px 28px' }}
           >
             ⚡ Create a New Room
           </button>
         </div>
       )}
 
-      {/* Waiting for Peer: Show QR Code */}
+      {/* Waiting for Peer: Show QR Code & Link Card */}
       {roomStatus === 'waiting' && isOwner && joinToken && (
-        <div className="card">
+        <div className="card animate-entrance">
           <QRCodeDisplay
             roomId={roomId}
             joinToken={joinToken}
@@ -245,27 +231,92 @@ export function Room({
 
       {/* Active Room: WebRTC File & Text Sharing */}
       {isConnected && !isTerminated && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* File Transfer Drop Zone */}
-          <div className="card" style={{ padding: '16px' }}>
-            <FileDropZone
-              onFilesSelected={onFilesSelected}
-              disabled={!isP2PConnected}
-            />
-            {/* Transfer Queue */}
-            <TransferQueue
-              transfers={transfers}
-              onCancelTransfer={onCancelTransfer}
-            />
+        <>
+          {/* iOS Segmented Bar for Mobile Devices */}
+          <div className="mobile-room-switcher">
+            <div className="ios-segmented-control" style={{ width: '100%' }}>
+              <button
+                type="button"
+                onClick={() => setMobileTab('files')}
+                className={`ios-segment-btn ${mobileTab === 'files' ? 'active' : ''}`}
+              >
+                <span>📁 Files</span>
+                {transfers.length > 0 && (
+                  <span
+                    style={{
+                      background: mobileTab === 'files' ? 'var(--color-canopy-dark)' : 'var(--color-lime)',
+                      color: mobileTab === 'files' ? 'var(--color-lime)' : 'var(--color-lime-text)',
+                      fontSize: '0.7rem',
+                      fontWeight: 800,
+                      padding: '1px 6px',
+                      borderRadius: 'var(--radius-full)'
+                    }}
+                  >
+                    {transfers.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMobileTab('chat')}
+                className={`ios-segment-btn ${mobileTab === 'chat' ? 'active' : ''}`}
+              >
+                <span>💬 P2P Chat</span>
+                {messages.length > 0 && (
+                  <span
+                    style={{
+                      background: mobileTab === 'chat' ? 'var(--color-canopy-dark)' : 'var(--color-lime)',
+                      color: mobileTab === 'chat' ? 'var(--color-lime)' : 'var(--color-lime-text)',
+                      fontSize: '0.7rem',
+                      fontWeight: 800,
+                      padding: '1px 6px',
+                      borderRadius: 'var(--radius-full)'
+                    }}
+                  >
+                    {messages.length}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
 
-          {/* Direct P2P Text Chat */}
-          <TextTransfer
-            messages={messages}
-            onSendMessage={onSendMessage}
-            disabled={!isP2PConnected}
-          />
-        </div>
+          {/* Desktop & Mobile Responsive Cockpit Grid */}
+          <div className="room-dashboard-grid">
+            {/* Left Column: File Transfer Dropzone & Queue */}
+            <div className={`desktop-column-left ${mobileTab === 'files' ? 'mobile-pane-active' : 'mobile-pane-inactive'}`}>
+              <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: 'var(--color-lime)' }}>⚡</span> Direct File Transfer
+                  </h3>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                    {isP2PConnected ? 'P2P Active' : 'Waiting for P2P...'}
+                  </span>
+                </div>
+
+                <FileDropZone
+                  onFilesSelected={onFilesSelected}
+                  disabled={!isP2PConnected}
+                />
+
+                <TransferQueue
+                  transfers={transfers}
+                  onCancelTransfer={onCancelTransfer}
+                />
+              </div>
+            </div>
+
+            {/* Right Column: Direct P2P Text Chat */}
+            <div className={`desktop-column-right ${mobileTab === 'chat' ? 'mobile-pane-active' : 'mobile-pane-inactive'}`}>
+              <TextTransfer
+                messages={messages}
+                onSendMessage={onSendMessage}
+                disabled={!isP2PConnected}
+              />
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

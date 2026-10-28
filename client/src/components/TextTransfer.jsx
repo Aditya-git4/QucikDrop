@@ -3,7 +3,7 @@ import { CopyButton } from './CopyButton.jsx';
 import { validateMessageText } from '../utils/validateInput.js';
 
 /**
- * Bidirectional text sharing interface for active rooms.
+ * Modern iOS glassmorphic text sharing interface with iMessage-style bubbles and spring animations.
  * @param {{
  *   messages: Array<{
  *     id: string,
@@ -50,32 +50,52 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
 
   return (
     <div
+      className="card"
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '420px',
-        border: '1px solid var(--color-border)',
-        borderRadius: 'var(--radius-lg)',
+        height: '460px',
+        padding: '0',
         overflow: 'hidden',
-        backgroundColor: 'var(--color-surface)'
+        background: 'rgba(24, 36, 23, 0.65)',
+        boxShadow: 'var(--glass-shadow)'
       }}
     >
-      {/* Messages Header */}
+      {/* Header Bar */}
       <div
         style={{
-          padding: '12px 16px',
-          borderBottom: '1px solid var(--color-border)',
-          backgroundColor: 'var(--color-bg)',
+          padding: '14px 20px',
+          borderBottom: '1px solid var(--glass-border)',
+          background: 'rgba(17, 26, 16, 0.75)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center'
         }}
       >
-        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-main)' }}>
-          P2P Messages ({messages.length})
-        </span>
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-          🔒 Direct WebRTC P2P (Zero Server Relay)
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '1.1rem' }}>💬</span>
+          <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
+            P2P Direct Messages
+          </span>
+          <span
+            style={{
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--color-lime-dim)',
+              color: 'var(--color-lime)',
+              border: '1px solid rgba(228, 253, 151, 0.25)'
+            }}
+          >
+            {messages.length}
+          </span>
+        </div>
+
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span>🔒</span> End-to-End P2P
         </span>
       </div>
 
@@ -83,11 +103,11 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
       <div
         style={{
           flex: 1,
-          padding: '16px',
+          padding: '18px',
           overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: '12px'
+          gap: '14px'
         }}
       >
         {messages.length === 0 ? (
@@ -97,19 +117,25 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
               textAlign: 'center',
               color: 'var(--color-text-muted)',
               fontSize: '0.9rem',
-              maxWidth: '300px'
+              maxWidth: '300px',
+              padding: '20px'
             }}
           >
-            <div style={{ fontSize: '2rem', marginBottom: '8px' }}>💬</div>
-            <p><strong>Ready to exchange text</strong></p>
-            <p style={{ fontSize: '0.8rem', marginTop: '4px' }}>
-              Type a message, note, link, or code snippet below to share it instantly with the connected device.
+            <div style={{ fontSize: '2.5rem', marginBottom: '10px', filter: 'drop-shadow(0 0 12px rgba(228, 253, 151, 0.3))' }}>
+              ⚡
+            </div>
+            <p style={{ fontWeight: 700, color: 'var(--color-text-main)', marginBottom: '4px' }}>
+              Direct Chat Ready
+            </p>
+            <p style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
+              Share links, text snippets, and notes instantly across devices. Zero server logs.
             </p>
           </div>
         ) : (
           messages.map((msg) => (
             <div
               key={msg.id}
+              className="animate-entrance"
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -120,36 +146,43 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
             >
               <div
                 style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--color-text-muted)',
-                  marginBottom: '2px',
-                  padding: '0 4px'
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  color: 'var(--color-text-subtle)',
+                  marginBottom: '4px',
+                  padding: '0 6px'
                 }}
               >
                 {msg.isMine ? 'You' : msg.deviceName} •{' '}
-                {new Date(msg.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                {new Date(msg.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>
 
               <div
                 style={{
-                  padding: '10px 14px',
-                  borderRadius: msg.isMine ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
-                  backgroundColor: msg.isMine ? 'var(--color-primary)' : 'var(--color-surface-hover)',
-                  color: msg.isMine ? 'var(--color-primary-text)' : 'var(--color-text-main)',
-                  border: msg.isMine ? 'none' : '1px solid var(--color-border)',
+                  padding: '12px 16px',
+                  borderRadius: msg.isMine ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
+                  backgroundColor: msg.isMine ? 'var(--color-lime)' : 'rgba(45, 62, 44, 0.65)',
+                  color: msg.isMine ? 'var(--color-lime-text)' : 'var(--color-text-main)',
+                  border: msg.isMine ? '1px solid rgba(228, 253, 151, 0.6)' : '1px solid var(--glass-border)',
+                  boxShadow: msg.isMine
+                    ? '0 6px 18px -2px rgba(228, 253, 151, 0.35)'
+                    : 'var(--glass-shadow-sm)',
                   wordBreak: 'break-word',
                   whiteSpace: 'pre-wrap',
                   position: 'relative',
-                  fontSize: '0.95rem'
+                  fontSize: '0.94rem',
+                  lineHeight: 1.5,
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)'
                 }}
               >
                 {msg.text}
-                <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
                   <CopyButton
                     text={msg.text}
-                    label="Copy text"
+                    label="Copy"
                     successLabel="Copied!"
-                    className="btn-secondary"
+                    className={msg.isMine ? 'btn-primary' : 'btn-secondary'}
                   />
                 </div>
               </div>
@@ -163,28 +196,32 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
       <div
         style={{
           padding: '12px 16px',
-          borderTop: '1px solid var(--color-border)',
-          backgroundColor: 'var(--color-bg)',
+          borderTop: '1px solid var(--glass-border)',
+          background: 'rgba(15, 22, 14, 0.85)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
           display: 'flex',
           flexDirection: 'column',
           gap: '8px'
         }}
       >
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <textarea
             ref={inputRef}
-            rows={2}
+            rows={1}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={disabled ? 'Waiting for peer to connect...' : 'Type text to send... (Enter to send)'}
+            placeholder={disabled ? 'Waiting for peer to connect...' : 'Send message or link...'}
             disabled={disabled}
             className="text-input"
             style={{
               resize: 'none',
               minHeight: '44px',
-              maxHeight: '100px',
-              padding: '8px 12px'
+              maxHeight: '120px',
+              padding: '10px 14px',
+              borderRadius: 'var(--radius-full)',
+              background: 'rgba(25, 38, 24, 0.6)'
             }}
           />
           <button
@@ -192,14 +229,14 @@ export function TextTransfer({ messages, onSendMessage, disabled = false }) {
             onClick={handleSend}
             disabled={disabled || !inputText.trim() || isOverLimit}
             className="btn btn-primary"
-            style={{ minWidth: '80px', height: '44px' }}
+            style={{ minWidth: '76px', height: '44px', borderRadius: 'var(--radius-full)', padding: '0 18px' }}
           >
             Send
           </button>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-          <span>Press Enter to send, Shift+Enter for newline</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--color-text-subtle)', padding: '0 4px' }}>
+          <span>Enter to send • Shift+Enter for newline</span>
           <span style={{ color: isOverLimit ? 'var(--color-danger)' : 'inherit' }}>
             {inputText.length} / {maxLength}
           </span>
