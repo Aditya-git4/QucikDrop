@@ -15,15 +15,36 @@ export function classifyCandidatePair(localType, remoteType) {
 }
 
 /**
+ * Default WebRTC STUN and TURN relay servers for client fallback.
+ * Includes OpenRelay by Metered so mobile carrier networks (CGNAT) and symmetric NATs work out of the box.
+ */
+export const DEFAULT_CLIENT_ICE_SERVERS = [
+  {
+    urls: [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun.cloudflare.com:3478'
+    ]
+  },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp'
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+];
+
+/**
  * PeerConnectionManager handles the lifecycle of an RTCPeerConnection,
- * STUN candidate exchange, candidate queueing, and RTCDataChannel management.
+ * STUN/TURN candidate exchange, candidate queueing, and RTCDataChannel management.
  */
 export class PeerConnectionManager {
   constructor(options = {}) {
-    this.iceServers = options.iceServers || [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
-    ];
+    this.iceServers = options.iceServers || DEFAULT_CLIENT_ICE_SERVERS;
 
     /** @type {RTCPeerConnection | null} */
     this.pc = null;
@@ -79,12 +100,31 @@ export class PeerConnectionManager {
    */
   initPeerConnection() {
     if (this.pc) {
-      this.close();
+      try {
+        this.controlChannel?.close();
+      } catch {
+        // ignore
+      }
+      try {
+        this.fileChannel?.close();
+      } catch {
+        // ignore
+      }
+      try {
+        this.pc.close();
+      } catch {
+        // ignore
+      }
+      this.controlChannel = null;
+      this.fileChannel = null;
+      this.pc = null;
     }
 
     this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.isRemoteDescriptionSet = false;
-    this.iceCandidateQueue = [];
+    if (!this.iceCandidateQueue) {
+      this.iceCandidateQueue = [];
+    }
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -369,13 +409,18 @@ export class PeerConnectionManager {
   }
 
   /**
-   * Handle incoming ICE candidate with queueing.
+   * Handle incoming ICE candidate with safe queueing for early arrival.
    * @param {RTCIceCandidateInit} candidate
    */
   async addIceCandidate(candidate) {
-    if (!this.pc) return;
+    if (!candidate) return;
 
-    if (!this.isRemoteDescriptionSet || !this.pc.remoteDescription) {
+    if (!this.iceCandidateQueue) {
+      this.iceCandidateQueue = [];
+    }
+
+    // If PC is not yet created, or remote description is not set yet, queue the candidate!
+    if (!this.pc || !this.isRemoteDescriptionSet || !this.pc.remoteDescription) {
       this.iceCandidateQueue.push(candidate);
       return;
     }
@@ -391,9 +436,9 @@ export class PeerConnectionManager {
    * Drain queued candidates after remote description is applied.
    */
   async drainIceCandidateQueue() {
-    if (!this.pc) return;
+    if (!this.pc || !this.isRemoteDescriptionSet || !this.pc.remoteDescription) return;
 
-    while (this.iceCandidateQueue.length > 0) {
+    while (this.iceCandidateQueue && this.iceCandidateQueue.length > 0) {
       const candidate = this.iceCandidateQueue.shift();
       try {
         await this.pc.addIceCandidate(new RTCIceCandidate(candidate));

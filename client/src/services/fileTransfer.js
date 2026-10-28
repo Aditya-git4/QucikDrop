@@ -144,12 +144,18 @@ export class FileTransferManager {
       direction: 'send'
     });
 
-    // 2. Wait for receiver-ready handshake
-    await new Promise((resolve) => {
+    // 2. Wait for receiver-ready handshake with timeout protection
+    await new Promise((resolve, reject) => {
+      let timeoutTimer = null;
       const onReady = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         this.off(`ready:${transferId}`, onReady);
         resolve();
       };
+      timeoutTimer = setTimeout(() => {
+        this.off(`ready:${transferId}`, onReady);
+        reject(new Error('Receiver handshake timed out. Peer may have disconnected.'));
+      }, 10000);
       this.on(`ready:${transferId}`, onReady);
     });
 

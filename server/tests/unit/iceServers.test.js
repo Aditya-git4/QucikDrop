@@ -5,7 +5,8 @@ import {
   getIceServers,
   parseUrls,
   generateEphemeralCredentials,
-  DEFAULT_STUN_SERVERS
+  DEFAULT_STUN_SERVERS,
+  DEFAULT_TURN_SERVERS
 } from '../../src/config/iceServers.js';
 
 describe('ICE & TURN Server Configuration', () => {
@@ -18,7 +19,16 @@ describe('ICE & TURN Server Configuration', () => {
     assert.deepEqual(parseUrls(undefined), []);
   });
 
-  it('returns default public STUN servers when no custom configuration is provided', () => {
+  it('returns default public STUN and OpenRelay TURN servers when no custom override is passed', () => {
+    const servers = getIceServers('peer-live');
+    assert.ok(servers.length >= 2);
+    assert.deepEqual(servers[0].urls, DEFAULT_STUN_SERVERS);
+    assert.deepEqual(servers[1].urls, DEFAULT_TURN_SERVERS[0].urls);
+    assert.equal(servers[1].username, 'openrelayproject');
+    assert.equal(servers[1].credential, 'openrelayproject');
+  });
+
+  it('returns only STUN servers when custom configuration specifies empty turnUrls', () => {
     const servers = getIceServers('peer-123', {
       stunUrls: '',
       turnUrls: '',

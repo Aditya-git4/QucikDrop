@@ -233,6 +233,11 @@ export function useFileTransfer({ peerConnection }) {
     };
     peerConnection.on('ready', handleReady);
 
+    // If fileChannel is already open, immediately attempt to drain any queued files
+    if (peerConnection?.fileChannel?.readyState === 'open') {
+      processSendQueue();
+    }
+
     return () => {
       peerConnection.off('ready', handleReady);
       managerRef.current = null;

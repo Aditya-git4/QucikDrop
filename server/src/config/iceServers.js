@@ -13,6 +13,23 @@ export const DEFAULT_STUN_SERVERS = [
 ];
 
 /**
+ * Default public TURN relay servers (OpenRelay by Metered) for cross-network NAT traversal.
+ * Enables WebRTC DataChannels when devices are on separate Wi-Fi networks or mobile 4G/5G carrier CGNAT.
+ */
+export const DEFAULT_TURN_SERVERS = [
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp'
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+];
+
+/**
  * Parse comma-separated URL string into trimmed array.
  * @param {string | undefined} urlString
  * @returns {string[]}
@@ -100,6 +117,10 @@ export function getIceServers(peerId = 'peer', customConfig = null) {
         credential: envConfig.turnCredential
       });
     }
+  } else if (!customConfig) {
+    // In production / live deployment without custom env TURN servers:
+    // Supply OpenRelay TURN servers so mobile carrier CGNAT / Symmetric NAT cross-network beam works.
+    iceServers.push(...DEFAULT_TURN_SERVERS);
   }
 
   return iceServers;
