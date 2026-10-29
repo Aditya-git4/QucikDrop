@@ -79,7 +79,7 @@ export function useWebRTC({
 
     // 2. Peer connection status change
     const handleStatusChange = (status) => {
-      if (status === 'connected') {
+      if (status === 'connected' || status === 'completed') {
         setWebrtcStatus('connected');
         if (
           pcManager.controlChannel?.readyState === 'open' ||
@@ -93,10 +93,15 @@ export function useWebRTC({
         setConnectionType('unknown');
         setConnectionStats(null);
       } else if (status === 'disconnected' || status === 'closed') {
-        setWebrtcStatus('disconnected');
-        setIsP2PConnected(false);
-        setConnectionType('unknown');
-        setConnectionStats(null);
+        if (
+          pcManager.controlChannel?.readyState !== 'open' &&
+          pcManager.fileChannel?.readyState !== 'open'
+        ) {
+          setWebrtcStatus('disconnected');
+          setIsP2PConnected(false);
+          setConnectionType('unknown');
+          setConnectionStats(null);
+        }
       }
     };
 

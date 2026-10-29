@@ -126,118 +126,129 @@ export class FileTransferManager {
       hasher
     });
 
-    // 1. Notify receiver of file metadata
-    this.peerConnection.sendControl({
-      type: 'file:start',
-      transferId,
-      fileName: safeName,
-      fileSize: file.size,
-      mimeType: file.type || 'application/octet-stream',
-      chunkSize: CHUNK_SIZE,
-      totalChunks
-    });
-
-    this.emit('transferStarted', {
-      transferId,
-      fileName: safeName,
-      fileSize: file.size,
-      direction: 'send'
-    });
-
-    // 2. Wait for receiver-ready handshake with timeout protection
-    await new Promise((resolve, reject) => {
-      let timeoutTimer = null;
-      const onReady = () => {
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        this.off(`ready:${transferId}`, onReady);
-        resolve();
-      };
-      timeoutTimer = setTimeout(() => {
-        this.off(`ready:${transferId}`, onReady);
-        reject(new Error('Receiver handshake timed out. Peer may have disconnected.'));
-      }, 10000);
-      this.on(`ready:${transferId}`, onReady);
-    });
-
-    // 3. Transmit file chunks with backpressure and incremental SHA-256 hashing
-    let offset = 0;
-    const sendRecord = this.activeSends.get(transferId);
-    const startTime = Date.now();
-
-    while (offset < file.size) {
-      if (!sendRecord || sendRecord.isCancelled) {
-        this.activeSends.delete(transferId);
-        return transferId;
-      }
-
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      const buffer = await slice.arrayBuffer();
-
-      // Update cryptographic hash incrementally (O(1) memory)
-      hasher.update(buffer);
-
-      this.peerConnection.sendFileChunk(buffer);
-      offset += buffer.byteLength;
-
-      // Calculate speed and progress
-      const elapsedSeconds = Math.max(0.001, (Date.now() - startTime) / 1000);
-      const speed = offset / elapsedSeconds;
-      const percent = Math.min(100, Math.round((offset / file.size) * 100));
-
-      this.emit('progress', {
+    try {
+      // 1. Notify receiver of file metadata
+      this.peerConnection.sendControl({
+        type: 'file:start',
         transferId,
-        bytesTransferred: offset,
-        totalBytes: file.size,
-        percent,
-        speed,
+        fileName: safeName,
+        fileSize: file.size,
+        mimeType: file.type || 'application/octet-stream',
+        chunkSize: CHUNK_SIZE,
+        totalChunks
+      });
+
+      this.emit('transferStarted', {
+        transferId,
+        fileName: safeName,
+        fileSize: file.size,
         direction: 'send'
       });
 
-      // Backpressure flow control: wait if buffer exceeds threshold
+      // 2. Wait for receiver-ready handshake with timeout protection
+      await new Promise((resolve, reject) => {
+        let timeoutTimer = null;
+        const onReady = () => {
+          if (timeoutTimer) clearTimeout(timeoutTimer);
+          this.off(`ready:${transferId}`, onReady);
+          resolve();
+        };
+        timeoutTimer = setTimeout(() => {
+          this.off(`ready:${transferId}`, onReady);
+          reject(new Error('Receiver handshake timed out. Peer may have disconnected.'));
+        }, 10000);
+        this.on(`ready:${transferId}`, onReady);
+      });
+
+      // 3. Transmit file chunks with backpressure and incremental SHA-256 hashing
+      let offset = 0;
+      const sendRecord = this.activeSends.get(transferId);
+      const startTime = Date.now();
+
+      while (offset < file.size) {
+        if (!sendRecord || sendRecord.isCancelled) {
+          this.activeSends.delete(transferId);
+          return transferId;
+        }
+
+        const slice = file.slice(offset, offset + CHUNK_SIZE);
+        const buffer = await slice.arrayBuffer();
+
+        // Update cryptographic hash incrementally (O(1) memory)
+        hasher.update(buffer);
+
+        this.peerConnection.sendFileChunk(buffer);
+        offset += buffer.byteLength;
+
+        // Calculate speed and progress
+        const elapsedSeconds = Math.max(0.001, (Date.now() - startTime) / 1000);
+        const speed = offset / elapsedSeconds;
+        const percent = Math.min(100, Math.round((offset / file.size) * 100));
+
+        this.emit('progress', {
+          transferId,
+          bytesTransferred: offset,
+          totalBytes: file.size,
+          percent,
+          speed,
+          direction: 'send'
+        });
+
+        // Backpressure flow control: wait if buffer exceeds threshold
+        if (
+          this.peerConnection.fileChannel &&
+          this.peerConnection.fileChannel.bufferedAmount > this.peerConnection.bufferedThreshold
+        ) {
+          await this.peerConnection.waitForBufferedAmountLow();
+        }
+      }
+
+      // 4. Drain all buffered file chunks before sending completion manifest
       if (
         this.peerConnection.fileChannel &&
-        this.peerConnection.fileChannel.bufferedAmount > this.peerConnection.bufferedThreshold
+        this.peerConnection.fileChannel.bufferedAmount > 0 &&
+        typeof this.peerConnection.waitForFileChannelDrained === 'function'
       ) {
-        await this.peerConnection.waitForBufferedAmountLow();
+        await this.peerConnection.waitForFileChannelDrained();
       }
+
+      // 5. Compute final verified SHA-256 hash
+      const fileHash = hasher.digest();
+
+      // 6. Send completion manifest with cryptographic hash
+      this.peerConnection.sendControl({
+        type: 'file:complete',
+        transferId,
+        fileHash,
+        totalBytes: file.size,
+        totalChunks
+      });
+
+      this.activeSends.delete(transferId);
+
+      const senderUrl = typeof window !== 'undefined' && window.URL ? URL.createObjectURL(file) : null;
+      this.emit('transferCompleted', {
+        transferId,
+        fileName: safeName,
+        fileSize: file.size,
+        mimeType: file.type || null,
+        fileHash,
+        verified: true,
+        downloadUrl: senderUrl,
+        direction: 'send'
+      });
+
+      return transferId;
+    } catch (err) {
+      this.activeSends.delete(transferId);
+      this.emit('transferError', {
+        transferId,
+        fileName: safeName,
+        code: 'SEND_FAILED',
+        message: err.message || 'File transmission failed'
+      });
+      throw err;
     }
-
-    // 4. Drain all buffered file chunks before sending completion manifest
-    if (
-      this.peerConnection.fileChannel &&
-      this.peerConnection.fileChannel.bufferedAmount > 0 &&
-      typeof this.peerConnection.waitForFileChannelDrained === 'function'
-    ) {
-      await this.peerConnection.waitForFileChannelDrained();
-    }
-
-    // 5. Compute final verified SHA-256 hash
-    const fileHash = hasher.digest();
-
-    // 6. Send completion manifest with cryptographic hash
-    this.peerConnection.sendControl({
-      type: 'file:complete',
-      transferId,
-      fileHash,
-      totalBytes: file.size,
-      totalChunks
-    });
-
-    this.activeSends.delete(transferId);
-
-    const senderUrl = typeof window !== 'undefined' && window.URL ? URL.createObjectURL(file) : null;
-    this.emit('transferCompleted', {
-      transferId,
-      fileName: safeName,
-      fileSize: file.size,
-      mimeType: file.type || null,
-      fileHash,
-      verified: true,
-      downloadUrl: senderUrl,
-      direction: 'send'
-    });
-
-    return transferId;
   }
 
   /**

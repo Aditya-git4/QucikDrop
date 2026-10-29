@@ -138,6 +138,7 @@ export function useSignaling() {
       setMyDeviceName(name);
       setErrorMessage(null);
       setErrorCode(null);
+      setRoomStatus('connecting');
       await ensureConnected();
       client.createRoom(name);
     } catch (err) {
@@ -153,6 +154,7 @@ export function useSignaling() {
       setMyDeviceName(name);
       setErrorMessage(null);
       setErrorCode(null);
+      setRoomStatus('connecting');
       await ensureConnected();
       client.joinRoom(targetRoomId, targetJoinToken, name);
     } catch (err) {

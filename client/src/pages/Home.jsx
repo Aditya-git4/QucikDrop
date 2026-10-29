@@ -139,7 +139,7 @@ export function Home({ onCreateRoom, onJoinRoom, isConnecting, errorMessage }) {
 
         {/* Tab 1: Create Room */}
         {activeTab === 'create' && (
-          <form onSubmit={handleCreate} style={{ maxWidth: '400px', margin: '0 auto', textAlign: 'left' }}>
+          <form onSubmit={handleCreate} action="javascript:void(0);" style={{ maxWidth: '400px', margin: '0 auto', textAlign: 'left' }}>
             <div className="input-group">
               <label htmlFor="device-name-input" className="input-label">
                 Your Device Name
@@ -157,7 +157,8 @@ export function Home({ onCreateRoom, onJoinRoom, isConnecting, errorMessage }) {
             </div>
 
             <button
-              type="submit"
+              type="button"
+              onClick={handleCreate}
               disabled={isConnecting || !deviceName.trim()}
               className="btn btn-primary"
               style={{ width: '100%', fontSize: '1.05rem', padding: '14px' }}
@@ -175,7 +176,7 @@ export function Home({ onCreateRoom, onJoinRoom, isConnecting, errorMessage }) {
 
         {/* Tab 2: Manual Join */}
         {activeTab === 'join' && (
-          <form onSubmit={handleManualJoin} style={{ maxWidth: '400px', margin: '0 auto', textAlign: 'left' }}>
+          <form onSubmit={handleManualJoin} action="javascript:void(0);" style={{ maxWidth: '400px', margin: '0 auto', textAlign: 'left' }}>
             <div className="input-group">
               <label htmlFor="device-name-input-join" className="input-label">
                 Your Device Name
@@ -225,7 +226,8 @@ export function Home({ onCreateRoom, onJoinRoom, isConnecting, errorMessage }) {
             </div>
 
             <button
-              type="submit"
+              type="button"
+              onClick={handleManualJoin}
               disabled={isConnecting}
               className="btn btn-primary"
               style={{ width: '100%', marginTop: '6px', fontSize: '1.05rem', padding: '14px' }}

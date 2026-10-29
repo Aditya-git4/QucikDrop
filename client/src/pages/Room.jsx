@@ -54,9 +54,9 @@ export function Room({
   // Handle files pasted from clipboard (from global keyboard or button)
   const handleClipboardFiles = useCallback((files) => {
     if (!files || files.length === 0) return;
-    if (!isP2PConnected) {
+    if (!isConnected && !isP2PConnected) {
       hapticError();
-      setPasteNotice('⚠️ Cannot send: Waiting for peer to establish P2P connection.');
+      setPasteNotice('⚠️ Cannot send: Waiting for peer to connect.');
       setTimeout(() => setPasteNotice(null), 3500);
       return;
     }
@@ -66,14 +66,14 @@ export function Room({
     onFilesSelected(files);
     setPasteNotice(`📋 Pasted & queued ${files.length} file(s)`);
     setTimeout(() => setPasteNotice(null), 3000);
-  }, [isP2PConnected, onFilesSelected]);
+  }, [isConnected, isP2PConnected, onFilesSelected]);
 
   // Handle text pasted from clipboard outside an input
   const handleClipboardText = useCallback((text) => {
     if (!text || !text.trim()) return;
-    if (!isP2PConnected) {
+    if (!isConnected && !isP2PConnected) {
       hapticError();
-      setPasteNotice('⚠️ Cannot send: Waiting for peer to establish P2P connection.');
+      setPasteNotice('⚠️ Cannot send: Waiting for peer to connect.');
       setTimeout(() => setPasteNotice(null), 3500);
       return;
     }
@@ -83,7 +83,7 @@ export function Room({
     onSendMessage(text.trim());
     setPasteNotice('📋 Pasted & sent text message');
     setTimeout(() => setPasteNotice(null), 3000);
-  }, [isP2PConnected, onSendMessage]);
+  }, [isConnected, isP2PConnected, onSendMessage]);
 
   // 1-Tap Clipboard Button for mobile & desktop
   const handlePasteFromDeviceClipboard = useCallback(async () => {

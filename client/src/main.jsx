@@ -3,9 +3,9 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
 
-// Auto-reload on Vite chunk preload error (happens after new deploy when bundle hash changes)
-window.addEventListener('vite:preloadError', () => {
-  window.location.reload();
+// Log Vite chunk preload error if any
+window.addEventListener('vite:preloadError', (event) => {
+  console.warn('Vite preload error:', event);
 });
 
 const rootElement = document.getElementById('root');

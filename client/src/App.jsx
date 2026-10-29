@@ -127,8 +127,13 @@ export function App() {
     }
   };
 
+  const hasParsedUrlRef = useRef(false);
+
   // Check URL on initial load for invitation link (#token=...)
   useEffect(() => {
+    if (hasParsedUrlRef.current) return;
+    hasParsedUrlRef.current = true;
+
     const { roomId: urlRoomId, joinToken: urlJoinToken } = parseInvitationFromUrl();
     if (urlRoomId && urlJoinToken) {
       // Auto-join from QR code scan or link click

@@ -15,26 +15,17 @@ export function classifyCandidatePair(localType, remoteType) {
 }
 
 /**
- * Default WebRTC STUN and TURN relay servers for client fallback.
- * Includes OpenRelay by Metered so mobile carrier networks (CGNAT) and symmetric NATs work out of the box.
+ * Default WebRTC STUN servers for client discovery.
  */
 export const DEFAULT_CLIENT_ICE_SERVERS = [
   {
     urls: [
       'stun:stun.l.google.com:19302',
       'stun:stun1.l.google.com:19302',
-      'stun:stun.cloudflare.com:3478'
+      'stun:stun2.l.google.com:19302',
+      'stun:stun.cloudflare.com:3478',
+      'stun:stun.services.mozilla.com:3478'
     ]
-  },
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp',
-      'turns:openrelay.metered.ca:443?transport=tcp'
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject'
   }
 ];
 
@@ -174,11 +165,11 @@ export class PeerConnectionManager {
     this.connectionState = state;
     this.emit('statusChange', state);
 
-    if (state === 'connected') {
+    if (state === 'connected' || state === 'completed') {
       this.startStatsPolling();
       this.updateConnectionStats();
       this.checkReadyState();
-    } else if (['disconnected', 'failed', 'closed'].includes(state)) {
+    } else if (['failed', 'closed'].includes(state)) {
       this.stopStatsPolling();
       this.connectionType = 'unknown';
       this.connectionStats = null;
