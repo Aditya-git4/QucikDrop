@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSignaling } from './hooks/useSignaling.js';
 import { useWebRTC } from './hooks/useWebRTC.js';
 import { useFileTransfer } from './hooks/useFileTransfer.js';
