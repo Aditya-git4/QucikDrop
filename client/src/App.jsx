@@ -6,7 +6,8 @@ import { Home } from './pages/Home.jsx';
 import { Room } from './pages/Room.jsx';
 import { ConnectionBanner } from './components/ConnectionBanner.jsx';
 import { ErrorMessage } from './components/ErrorMessage.jsx';
-import { parseInvitationFromUrl } from './utils/roomUtils.js';
+import { DebugLog } from './components/DebugLog.jsx';
+import { parseInvitationFromUrl, getRoomSession } from './utils/roomUtils.js';
 
 export class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -51,10 +52,12 @@ export class ErrorBoundary extends React.Component {
 
 export function App() {
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [hasNewVersion, setHasNewVersion] = useState(false);
   const {
     signalingClient,
     connectionStatus,
     roomStatus,
+    isPeerReconnecting,
     roomId,
     joinToken,
     isOwner,
@@ -66,6 +69,7 @@ export function App() {
     errorCode,
     createRoom,
     joinRoom,
+    rejoinRoom,
     closeRoom,
     reset,
     setMyDeviceName
@@ -91,6 +95,7 @@ export function App() {
   const {
     transfers,
     queueFiles,
+    retryTransfer,
     cancelTransfer,
     clearCompleted,
     isWakeLockActive
@@ -119,6 +124,17 @@ export function App() {
     };
   }, []);
 
+  // Listen for service worker updates taking control
+  useEffect(() => {
+    const handleNewVersion = () => {
+      setHasNewVersion(true);
+    };
+    window.addEventListener('quickdrop:new-version', handleNewVersion);
+    return () => {
+      window.removeEventListener('quickdrop:new-version', handleNewVersion);
+    };
+  }, []);
+
   const handleInstallApp = async () => {
     if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
@@ -130,22 +146,27 @@ export function App() {
 
   const hasParsedUrlRef = useRef(false);
 
-  // Check URL on initial load for invitation link (#token=...)
+  // Check URL on initial load for invitation link (#token=...) or stored session
   useEffect(() => {
     if (hasParsedUrlRef.current) return;
     hasParsedUrlRef.current = true;
 
     const { roomId: urlRoomId, joinToken: urlJoinToken } = parseInvitationFromUrl();
-    if (urlRoomId && urlJoinToken) {
+    const storedSession = urlRoomId ? getRoomSession(urlRoomId) : null;
+
+    if (storedSession && storedSession.roomId === urlRoomId && storedSession.peerSecret) {
+      // Rejoin existing room using stored session credentials rather than consuming token
+      rejoinRoom(storedSession.roomId, storedSession.peerId, storedSession.peerSecret, storedSession.deviceName);
+    } else if (urlRoomId && urlJoinToken) {
       // Auto-join from QR code scan or link click
       joinRoom(urlRoomId, urlJoinToken);
     } else if (urlRoomId && !urlJoinToken) {
-      // If user refreshed on /room/:id without token, normalize address bar cleanly to /
+      // If user refreshed on /room/:id without token and no stored session, normalize address bar cleanly to /
       if (typeof window !== 'undefined' && window.location.pathname !== '/') {
-        window.history.replaceState(null, '', '/');
+        window.history.replaceState(null, '', '/' + window.location.search);
       }
     }
-  }, [joinRoom]);
+  }, [joinRoom, rejoinRoom]);
 
   const handleReset = () => {
     reset();
@@ -181,13 +202,15 @@ export function App() {
               <span>QuickDrop</span>
             </span>
             <span className="brand-badge">
-              {isP2PConnected
-                ? connectionType === 'relay'
-                  ? 'Relayed'
-                  : connectionType === 'lan'
+              {connectionStatus === 'disconnected'
+                ? 'Offline'
+                : isP2PConnected
+                ? connectionType === 'lan'
                   ? 'LAN P2P'
+                  : connectionType === 'relay'
+                  ? 'Relay (server)'
                   : 'Direct P2P'
-                : 'P2P Ready'}
+                : 'Relay (server)'}
             </span>
           </a>
 
@@ -273,6 +296,7 @@ export function App() {
               roomId={roomId || ''}
               joinToken={joinToken}
               roomStatus={roomStatus}
+              isPeerReconnecting={isPeerReconnecting}
               isOwner={isOwner}
               myDeviceName={myDeviceName}
               peerDeviceName={peerDeviceName}
@@ -289,6 +313,7 @@ export function App() {
               transfers={transfers}
               isWakeLockActive={isWakeLockActive}
               onFilesSelected={queueFiles}
+              onRetryTransfer={retryTransfer}
               onCancelTransfer={cancelTransfer}
               onClearCompleted={clearCompleted}
             />
@@ -302,6 +327,51 @@ export function App() {
           QuickDrop — Temporary Peer-to-Peer Sharing • Zero server file storage • Native WebRTC
         </p>
       </footer>
+
+      {/* On-Screen Diagnostic Debug Overlay (toggled via ?debug=1) */}
+      <DebugLog peerConnection={peerConnection} signalingClient={signalingClient} />
+
+      {/* New version available notification */}
+      {hasNewVersion && (
+        <aside
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            zIndex: 9999,
+            backgroundColor: 'rgba(22, 29, 23, 0.95)',
+            border: '1px solid var(--color-lime)',
+            backdropFilter: 'blur(12px)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            borderRadius: '9999px',
+            padding: '8px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            color: 'var(--color-text-main)',
+            fontSize: '0.84rem'
+          }}
+        >
+          <span style={{ fontSize: '1rem' }}>⚡</span>
+          <span style={{ fontWeight: 500 }}>New version available</span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{
+              minHeight: '28px',
+              padding: '2px 12px',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              borderRadius: '9999px'
+            }}
+            onClick={() => window.location.reload()}
+          >
+            Reload
+          </button>
+        </aside>
+      )}
     </div>
   );
 }

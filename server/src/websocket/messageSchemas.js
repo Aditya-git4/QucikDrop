@@ -7,13 +7,15 @@ export const ErrorCodes = {
   INVALID_MESSAGE: 'INVALID_MESSAGE',
   INVALID_ROOM: 'INVALID_ROOM',
   INVALID_TOKEN: 'INVALID_TOKEN',
+  INVALID_REJOIN: 'INVALID_REJOIN',
   ROOM_EXPIRED: 'ROOM_EXPIRED',
   ROOM_FULL: 'ROOM_FULL',
   TOKEN_USED: 'TOKEN_USED',
   NOT_AUTHORIZED: 'NOT_AUTHORIZED',
   RATE_LIMITED: 'RATE_LIMITED',
   ROOM_CAPACITY_EXCEEDED: 'ROOM_CAPACITY_EXCEEDED',
-  INTERNAL_ERROR: 'INTERNAL_ERROR'
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  PEER_UNAVAILABLE: 'PEER_UNAVAILABLE'
 };
 
 /**
@@ -107,6 +109,27 @@ export function validateJoinRoom(msg) {
   }
   if (typeof msg.joinToken !== 'string' || !msg.joinToken || msg.joinToken.length > 128) {
     return 'joinToken must be a non-empty string (max 128 chars)';
+  }
+  if (msg.deviceName !== undefined && typeof msg.deviceName !== 'string') {
+    return 'deviceName must be a string';
+  }
+  return null;
+}
+
+/**
+ * Validate rejoin room message schema.
+ * @param {any} msg
+ * @returns {string | null}
+ */
+export function validateRejoinRoom(msg) {
+  if (typeof msg.roomId !== 'string' || !msg.roomId || msg.roomId.length > 64) {
+    return 'roomId must be a non-empty string (max 64 chars)';
+  }
+  if (typeof msg.peerId !== 'string' || !msg.peerId || msg.peerId.length > 64) {
+    return 'peerId must be a non-empty string (max 64 chars)';
+  }
+  if (typeof msg.peerSecret !== 'string' || !msg.peerSecret || msg.peerSecret.length > 128) {
+    return 'peerSecret must be a non-empty string (max 128 chars)';
   }
   if (msg.deviceName !== undefined && typeof msg.deviceName !== 'string') {
     return 'deviceName must be a string';

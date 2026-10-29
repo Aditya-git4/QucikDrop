@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { PeerConnectionManager } from '../services/peerConnection.js';
 import { playConnectSound, playMessageSound, hapticSuccess, hapticTap } from '../utils/soundEffects.js';
+import { isRelayModeEnabled, debugLogger } from '../utils/debugLogger.js';
 
 /**
  * useWebRTC manages RTCPeerConnection negotiation, ICE signaling via WebSocket,
@@ -22,11 +23,13 @@ export function useWebRTC({
   peerDeviceName,
   iceServers = null
 }) {
-  const [webrtcStatus, setWebrtcStatus] = useState('disconnected'); // disconnected, connecting, connected, failed
+  const isRelayOnly = isRelayModeEnabled();
+  const [webrtcStatus, setWebrtcStatus] = useState(isRelayOnly ? 'disabled (relay-only)' : 'disconnected');
   const [isP2PConnected, setIsP2PConnected] = useState(false);
-  const [connectionType, setConnectionType] = useState('unknown'); // 'unknown' | 'lan' | 'direct' | 'relay'
+  const [connectionType, setConnectionType] = useState(isRelayOnly ? 'relay' : 'unknown');
   const [connectionStats, setConnectionStats] = useState(null);
   const [p2pMessages, setP2pMessages] = useState([]);
+  const seenMessageIdsRef = useRef(new Set());
 
   const isOwnerRef = useRef(isOwner);
   const peerDeviceNameRef = useRef(peerDeviceName);
@@ -64,6 +67,42 @@ export function useWebRTC({
   useEffect(() => {
     if (!signalingClient) return;
 
+    if (isRelayOnly) {
+      debugLogger.logStateChange('WEBRTC', 'relay_mode_active', { note: 'RTCPeerConnection completely disabled via ?relay=1' });
+
+      const handleSignalingTextMessage = (msg) => {
+        if (msg && msg.text) {
+          if (msg.clientMessageId) {
+            if (seenMessageIdsRef.current.has(msg.clientMessageId)) return;
+            seenMessageIdsRef.current.add(msg.clientMessageId);
+          }
+
+          playMessageSound();
+          hapticTap();
+          setP2pMessages((prev) => {
+            if (prev.some((m) => m.id === msg.clientMessageId)) return prev;
+            return [
+              ...prev,
+              {
+                id: msg.clientMessageId || `${Date.now()}-${Math.random()}`,
+                text: msg.text,
+                deviceName: msg.deviceName || peerDeviceNameRef.current || 'Remote Peer',
+                sentAt: msg.sentAt || Date.now(),
+                isMine: false,
+                isRelayed: true
+              }
+            ];
+          });
+        }
+      };
+
+      signalingClient.on('textMessage', handleSignalingTextMessage);
+
+      return () => {
+        signalingClient.off('textMessage', handleSignalingTextMessage);
+      };
+    }
+
     // 1. ICE Candidate generation -> send to peer via signaling server
     const handleLocalIceCandidate = (candidate) => {
       try {
@@ -79,38 +118,60 @@ export function useWebRTC({
 
     // 2. Peer connection status change
     const handleStatusChange = (status) => {
-      if (status === 'connected' || status === 'completed') {
+      if (status === 'connected') {
         setWebrtcStatus('connected');
         if (
-          pcManager.controlChannel?.readyState === 'open' ||
-          pcManager.fileChannel?.readyState === 'open'
+          pcManager.isP2PHealthy &&
+          pcManager.controlChannel?.readyState === 'open' &&
+          pcManager.fileChannel?.readyState === 'open' &&
+          pcManager.pc?.connectionState === 'connected'
         ) {
           setIsP2PConnected(true);
         }
-      } else if (status === 'failed') {
-        setWebrtcStatus('failed');
+      } else if (['failed', 'disconnected', 'closed'].includes(status)) {
+        setWebrtcStatus(status);
         setIsP2PConnected(false);
-        setConnectionType('unknown');
+        setConnectionType('relay');
         setConnectionStats(null);
-      } else if (status === 'disconnected' || status === 'closed') {
-        if (
-          pcManager.controlChannel?.readyState !== 'open' &&
-          pcManager.fileChannel?.readyState !== 'open'
-        ) {
-          setWebrtcStatus('disconnected');
-          setIsP2PConnected(false);
-          setConnectionType('unknown');
-          setConnectionStats(null);
+      }
+    };
+
+    const handleHealthChange = (isHealthy) => {
+      if (!isHealthy) {
+        setIsP2PConnected(false);
+        setConnectionType('relay');
+      } else if (
+        pcManager.controlChannel?.readyState === 'open' &&
+        pcManager.fileChannel?.readyState === 'open' &&
+        pcManager.pc?.connectionState === 'connected'
+      ) {
+        setIsP2PConnected(true);
+        if (pcManager.connectionType && pcManager.connectionType !== 'unknown') {
+          setConnectionType(pcManager.connectionType);
+        } else {
+          setConnectionType('direct');
         }
       }
     };
 
     // 3. DataChannels ready
     const handleReady = () => {
-      setWebrtcStatus('connected');
-      setIsP2PConnected(true);
-      playConnectSound();
-      hapticSuccess();
+      if (
+        pcManager.isP2PHealthy &&
+        pcManager.controlChannel?.readyState === 'open' &&
+        pcManager.fileChannel?.readyState === 'open' &&
+        pcManager.pc?.connectionState === 'connected'
+      ) {
+        setWebrtcStatus('connected');
+        setIsP2PConnected(true);
+        if (pcManager.connectionType && pcManager.connectionType !== 'unknown') {
+          setConnectionType(pcManager.connectionType);
+        } else {
+          setConnectionType('direct');
+        }
+        playConnectSound();
+        hapticSuccess();
+      }
     };
 
     // 4. Connection type and stats monitoring
@@ -128,6 +189,11 @@ export function useWebRTC({
     // 5. Incoming P2P chat messages over control DataChannel
     const handleControlMessage = (msg) => {
       if (msg && msg.type === 'chat') {
+        if (msg.clientMessageId) {
+          if (seenMessageIdsRef.current.has(msg.clientMessageId)) return;
+          seenMessageIdsRef.current.add(msg.clientMessageId);
+        }
+
         playMessageSound();
         hapticTap();
         setP2pMessages((prev) => [
@@ -149,6 +215,7 @@ export function useWebRTC({
     pcManager.on('connectionType', handleConnectionType);
     pcManager.on('connectionStats', handleConnectionStats);
     pcManager.on('controlMessage', handleControlMessage);
+    pcManager.on('healthChange', handleHealthChange);
 
     // 5. Host initiates offer when Guest joins
     const handlePeerJoined = async () => {
@@ -164,6 +231,24 @@ export function useWebRTC({
         } catch (err) {
           console.error('Failed to create WebRTC offer:', err);
           setWebrtcStatus('failed');
+        }
+      }
+    };
+
+    const handlePeerReconnected = async () => {
+      if (isOwnerRef.current) {
+        if (!isP2PConnected || pcManager.pc?.connectionState === 'failed' || !pcManager.isP2PHealthy) {
+          setWebrtcStatus('connecting');
+          try {
+            const offer = await pcManager.createOffer();
+            signalingClient.send({
+              type: 'rtc:offer',
+              version: 1,
+              payload: offer
+            });
+          } catch (err) {
+            console.error('Failed to recreate WebRTC offer on peer reconnect:', err);
+          }
         }
       }
     };
@@ -207,6 +292,11 @@ export function useWebRTC({
     // 9. Incoming text messages via signaling WebSocket fallback
     const handleSignalingTextMessage = (msg) => {
       if (msg && msg.text) {
+        if (msg.clientMessageId) {
+          if (seenMessageIdsRef.current.has(msg.clientMessageId)) return;
+          seenMessageIdsRef.current.add(msg.clientMessageId);
+        }
+
         playMessageSound();
         hapticTap();
         setP2pMessages((prev) => {
@@ -227,6 +317,7 @@ export function useWebRTC({
     };
 
     signalingClient.on('peerJoined', handlePeerJoined);
+    signalingClient.on('peerReconnected', handlePeerReconnected);
     signalingClient.on('rtc:offer', handleOffer);
     signalingClient.on('rtc:answer', handleAnswer);
     signalingClient.on('rtc:ice-candidate', handleRemoteIceCandidate);
@@ -239,8 +330,10 @@ export function useWebRTC({
       pcManager.off('connectionType', handleConnectionType);
       pcManager.off('connectionStats', handleConnectionStats);
       pcManager.off('controlMessage', handleControlMessage);
+      pcManager.off('healthChange', handleHealthChange);
 
       signalingClient.off('peerJoined', handlePeerJoined);
+      signalingClient.off('peerReconnected', handlePeerReconnected);
       signalingClient.off('rtc:offer', handleOffer);
       signalingClient.off('rtc:answer', handleAnswer);
       signalingClient.off('rtc:ice-candidate', handleRemoteIceCandidate);
@@ -264,8 +357,15 @@ export function useWebRTC({
 
     let delivered = false;
 
-    // 1. Try P2P DataChannel if connected
-    if (isP2PConnected && pcManager?.controlChannel?.readyState === 'open') {
+    // 1. Try P2P DataChannel if connected and healthy
+    const isDcReady =
+      isP2PConnected &&
+      pcManager?.isP2PHealthy &&
+      pcManager?.controlChannel?.readyState === 'open' &&
+      pcManager?.fileChannel?.readyState === 'open' &&
+      pcManager?.pc?.connectionState === 'connected';
+
+    if (isDcReady) {
       try {
         const payload = {
           type: 'chat',
@@ -276,6 +376,35 @@ export function useWebRTC({
         };
         pcManager.sendControl(payload);
         delivered = true;
+
+        // Expect app-level ack over the DataChannel within 2 seconds
+        let ackReceived = false;
+        const ackTimeout = setTimeout(() => {
+          pcManager.off('controlMessage', onAck);
+          if (!ackReceived) {
+            console.warn(`No chat:ack received for ${clientMessageId} within 2s. Resending via WebSocket and marking P2P unhealthy.`);
+            debugLogger.logStateChange('WEBRTC', 'chat_ack_timeout', { clientMessageId }, pcManager, signalingClient);
+            pcManager.markP2PUnhealthy('chat_ack_timeout_2s');
+
+            if (signalingClient && signalingClient.isConnected) {
+              try {
+                signalingClient.sendTextMessage(trimmed, clientMessageId);
+              } catch (err) {
+                console.warn('Signaling resend error:', err);
+              }
+            }
+          }
+        }, 2000);
+
+        const onAck = (msg) => {
+          if (msg?.type === 'chat:ack' && msg.clientMessageId === clientMessageId) {
+            ackReceived = true;
+            clearTimeout(ackTimeout);
+            pcManager.off('controlMessage', onAck);
+          }
+        };
+
+        pcManager.on('controlMessage', onAck);
       } catch (err) {
         console.warn('P2P control send failed, falling back to signaling:', err);
       }

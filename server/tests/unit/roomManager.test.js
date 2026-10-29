@@ -117,18 +117,26 @@ describe('RoomManager', () => {
     assert.equal(roomManager.getRoom(roomId), undefined);
   });
 
-  it('handles peer disconnection by tearing down the room and identifying the remaining peer', () => {
+  it('handles peer disconnection by entering grace period and destroying room on grace timeout', () => {
     const { roomId, rawJoinToken } = roomManager.createRoom(mockOwnerWs, 'Windows PC');
-    roomManager.joinRoom(roomId, rawJoinToken, mockJoinerWs, 'Android Phone');
+    const { joinerPeerId } = roomManager.joinRoom(roomId, rawJoinToken, mockJoinerWs, 'Android Phone');
 
-    // Disconnect joiner
+    // Disconnect joiner -> enters grace period
     const result = roomManager.handleSocketDisconnect(mockJoinerWs);
     assert.ok(result);
+    assert.equal(result.status, 'grace_period');
     assert.equal(result.roomId, roomId);
     assert.ok(result.remainingPeer);
     assert.equal(result.remainingPeer.role, 'owner');
 
-    // Room should now be removed from manager
+    // Room survives during grace period
+    const room = roomManager.getRoom(roomId);
+    assert.ok(room);
+    assert.equal(room.members.get(joinerPeerId).ws, null);
+    assert.ok(room.members.get(joinerPeerId).disconnectedAt > 0);
+
+    // Grace timer fires -> destroys room
+    roomManager.handleGraceTimeout(roomId, joinerPeerId);
     assert.equal(roomManager.getRoom(roomId), undefined);
   });
 });

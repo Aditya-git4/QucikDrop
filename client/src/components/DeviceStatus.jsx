@@ -18,11 +18,13 @@ export function DeviceStatus({
   peerDeviceName,
   isOwner,
   isConnected,
+  isPeerReconnecting = false,
   isP2PConnected = false,
   connectionType = 'unknown',
   connectionStats = null
 }) {
   const getBadgeText = () => {
+    if (isPeerReconnecting) return '🔄 Peer reconnecting...';
     if (isP2PConnected) {
       if (connectionType === 'lan') return '⚡ LAN Direct';
       if (connectionType === 'relay') return '🔄 Relayed (TURN)';

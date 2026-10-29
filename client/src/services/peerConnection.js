@@ -1,3 +1,5 @@
+import { debugLogger, isRelayModeEnabled } from '../utils/debugLogger.js';
+
 /**
  * Classify connection type based on local and remote candidate types.
  * @param {string | undefined} localType
@@ -57,6 +59,13 @@ export class PeerConnectionManager {
     this.connectionStats = null;
     this.statsTimer = null;
     this.bufferedThreshold = 65536; // 64 KiB backpressure limit
+
+    // P2P DataChannel Heartbeat & Health Monitoring (Step 3)
+    this.isP2PHealthy = false;
+    this.heartbeatTimer = null;
+    this.lastPongReceivedAt = 0;
+    this.heartbeatIntervalMs = 3000; // 3 seconds
+    this.heartbeatTimeoutMs = 10000; // 10 seconds
   }
 
   on(event, handler) {
@@ -111,6 +120,11 @@ export class PeerConnectionManager {
       this.pc = null;
     }
 
+    if (isRelayModeEnabled()) {
+      debugLogger.logStateChange('PC', 'disabled_relay_mode', { reason: 'WebRTC disabled via ?relay=1' }, this);
+      return;
+    }
+
     this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.isRemoteDescriptionSet = false;
     if (!this.iceCandidateQueue) {
@@ -119,17 +133,21 @@ export class PeerConnectionManager {
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.emit('iceCandidate', event.candidate.toJSON());
+        const cand = event.candidate.toJSON();
+        debugLogger.logStateChange('ICE:candidate', cand.type || cand.candidate?.split(' ')[7] || 'gen', cand, this);
+        this.emit('iceCandidate', cand);
       }
     };
 
     this.pc.oniceconnectionstatechange = () => {
       if (!this.pc) return;
+      debugLogger.logStateChange('ICE', this.pc.iceConnectionState, null, this);
       this.handleStateChange(this.pc.iceConnectionState);
     };
 
     this.pc.onconnectionstatechange = () => {
       if (!this.pc) return;
+      debugLogger.logStateChange('PC', this.pc.connectionState, null, this);
       this.handleStateChange(this.pc.connectionState);
     };
 
@@ -165,11 +183,13 @@ export class PeerConnectionManager {
     this.connectionState = state;
     this.emit('statusChange', state);
 
-    if (state === 'connected' || state === 'completed') {
+    if (state === 'connected') {
       this.startStatsPolling();
       this.updateConnectionStats();
+      this.startHeartbeat();
       this.checkReadyState();
-    } else if (['failed', 'closed'].includes(state)) {
+    } else if (['failed', 'disconnected', 'closed'].includes(state)) {
+      this.markP2PUnhealthy('pc_state_' + state);
       this.stopStatsPolling();
       this.connectionType = 'unknown';
       this.connectionStats = null;
@@ -186,20 +206,62 @@ export class PeerConnectionManager {
     this.controlChannel = channel;
 
     channel.onopen = () => {
+      debugLogger.logStateChange('DC', 'control:open', null, this);
+      this.lastPongReceivedAt = Date.now();
+      this.isP2PHealthy = true;
+      this.startHeartbeat();
       this.checkReadyState();
     };
 
     channel.onclose = () => {
+      debugLogger.logStateChange('DC', 'control:closed', null, this);
+      this.stopHeartbeat();
+      this.markP2PUnhealthy('control_closed');
       this.emit('statusChange', 'disconnected');
     };
 
     channel.onerror = (err) => {
+      debugLogger.logStateChange('DC', 'control:error', err?.message || err, this);
+      this.markP2PUnhealthy('control_error');
       this.emit('error', err);
     };
 
     channel.onmessage = (event) => {
+      this.lastPongReceivedAt = Date.now();
       try {
         const parsed = JSON.parse(event.data);
+
+        // Internal P2P Heartbeat Ping / Pong handling
+        if (parsed?.type === '__dc_ping__') {
+          try {
+            channel.send(JSON.stringify({ type: '__dc_pong__', pingSentAt: parsed.sentAt }));
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        if (parsed?.type === '__dc_pong__') {
+          this.lastPongReceivedAt = Date.now();
+          if (!this.isP2PHealthy) {
+            this.markP2PHealthy();
+          }
+          return;
+        }
+
+        // App-level chat ACK reply over the same DataChannel
+        if (parsed?.type === 'chat' && parsed.clientMessageId) {
+          try {
+            channel.send(JSON.stringify({
+              type: 'chat:ack',
+              clientMessageId: parsed.clientMessageId,
+              ackAt: Date.now()
+            }));
+          } catch (err) {
+            console.warn('Failed to send chat:ack over DataChannel:', err);
+          }
+        }
+
+        debugLogger.logIncoming(parsed.type || 'control', 'webrtc-dc', this, null, parsed);
         this.emit('controlMessage', parsed);
       } catch (err) {
         console.warn('Received unparseable message on control channel:', err);
@@ -217,19 +279,24 @@ export class PeerConnectionManager {
     this.fileChannel.bufferedAmountLowThreshold = this.bufferedThreshold;
 
     channel.onopen = () => {
+      debugLogger.logStateChange('DC', 'file:open', null, this);
       this.checkReadyState();
     };
 
     channel.onclose = () => {
+      debugLogger.logStateChange('DC', 'file:closed', null, this);
       this.emit('statusChange', 'disconnected');
     };
 
     channel.onerror = (err) => {
+      debugLogger.logStateChange('DC', 'file:error', err?.message || err, this);
       this.emit('error', err);
     };
 
     channel.onmessage = (event) => {
+      this.lastPongReceivedAt = Date.now();
       if (event.data instanceof ArrayBuffer) {
+        debugLogger.logIncoming('file:chunk', 'webrtc-dc', this, null, { size: event.data.byteLength });
         this.emit('fileChunk', event.data);
       }
     };
@@ -238,11 +305,89 @@ export class PeerConnectionManager {
   checkReadyState() {
     const isControlOpen = this.controlChannel && this.controlChannel.readyState === 'open';
     const isFileOpen = this.fileChannel && this.fileChannel.readyState === 'open';
+    const isPcConnected = this.pc && this.pc.connectionState === 'connected';
 
-    if (isControlOpen || isFileOpen) {
+    // Heartbeat check requirement: both channels open and pc.connectionState === 'connected'
+    if (isControlOpen && isFileOpen && isPcConnected && this.isP2PHealthy) {
       this.emit('ready');
       this.startStatsPolling();
       this.updateConnectionStats();
+    }
+  }
+
+  /**
+   * Start 3-second control channel ping heartbeat.
+   */
+  startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      this.runHeartbeatCheck();
+    }, this.heartbeatIntervalMs);
+    if (this.heartbeatTimer?.unref) {
+      this.heartbeatTimer.unref();
+    }
+  }
+
+  /**
+   * Stop active heartbeat timer.
+   */
+  stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  /**
+   * Heartbeat interval check: verifies PC state, control channel state, pong arrival threshold, and transmits ping.
+   */
+  runHeartbeatCheck() {
+    if (!this.pc || ['failed', 'disconnected', 'closed'].includes(this.pc.connectionState)) {
+      this.markP2PUnhealthy('pc_state_' + (this.pc ? this.pc.connectionState : 'none'));
+      return;
+    }
+
+    if (!this.controlChannel || this.controlChannel.readyState !== 'open') {
+      this.markP2PUnhealthy('control_channel_not_open');
+      return;
+    }
+
+    const timeSinceLastPong = Date.now() - this.lastPongReceivedAt;
+    if (timeSinceLastPong > this.heartbeatTimeoutMs) {
+      this.markP2PUnhealthy(`pong_timeout_${timeSinceLastPong}ms`);
+      // Keep sending pings so remote peer can respond and restore health
+    }
+
+    try {
+      this.controlChannel.send(JSON.stringify({ type: '__dc_ping__', sentAt: Date.now() }));
+    } catch (err) {
+      this.markP2PUnhealthy('ping_send_error_' + err.message);
+    }
+  }
+
+  /**
+   * Mark P2P connection unhealthy, falling back to WebSocket.
+   * @param {string} reason
+   */
+  markP2PUnhealthy(reason) {
+    if (this.isP2PHealthy) {
+      this.isP2PHealthy = false;
+      debugLogger.logStateChange('WEBRTC', 'p2p_unhealthy', { reason }, this);
+      this.emit('healthChange', false);
+      this.emit('unhealthy', reason);
+    }
+  }
+
+  /**
+   * Mark P2P connection healthy.
+   */
+  markP2PHealthy() {
+    if (!this.isP2PHealthy) {
+      this.isP2PHealthy = true;
+      debugLogger.logStateChange('WEBRTC', 'p2p_healthy', null, this);
+      this.emit('healthChange', true);
+      this.emit('ready');
+      this.checkReadyState();
     }
   }
 
@@ -254,6 +399,9 @@ export class PeerConnectionManager {
     this.statsTimer = setInterval(() => {
       this.updateConnectionStats();
     }, 3000);
+    if (this.statsTimer?.unref) {
+      this.statsTimer.unref();
+    }
   }
 
   /**
@@ -447,6 +595,7 @@ export class PeerConnectionManager {
     if (!this.controlChannel || this.controlChannel.readyState !== 'open') {
       throw new Error('WebRTC control channel is not open');
     }
+    debugLogger.logOutgoing(payload?.type || 'control', 'webrtc-dc', this, null, payload);
     this.controlChannel.send(JSON.stringify(payload));
   }
 
@@ -458,6 +607,7 @@ export class PeerConnectionManager {
     if (!this.fileChannel || this.fileChannel.readyState !== 'open') {
       throw new Error('WebRTC file channel is not open');
     }
+    debugLogger.logOutgoing('file:chunk', 'webrtc-dc', this, null, { size: chunk?.byteLength });
     this.fileChannel.send(chunk);
   }
 
@@ -521,6 +671,9 @@ export class PeerConnectionManager {
    * Teardown and close all peer connection resources.
    */
   close() {
+    this.stopHeartbeat();
+    this.isP2PHealthy = false;
+
     if (this.controlChannel) {
       try {
         this.controlChannel.close();

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { CopyButton } from './CopyButton.jsx';
 import { hapticTap } from '../utils/soundEffects.js';
+import { isDebugEnabled } from '../utils/debugLogger.js';
 
 /**
  * Modern VisionOS / Apple AirDrop-style radar QR code invitation display.
@@ -14,8 +15,10 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
     return typeof window !== 'undefined' ? window.location.origin : '';
   });
 
+  const isDebug = isDebugEnabled();
+  const debugParam = isDebug ? '?debug=1' : '';
   const invitationUrl = joinToken
-    ? `${customOrigin}/room/${encodeURIComponent(roomId)}#token=${encodeURIComponent(joinToken)}`
+    ? `${customOrigin}/room/${encodeURIComponent(roomId)}${debugParam}#token=${encodeURIComponent(joinToken)}`
     : '';
 
   // Render QR Code with maximum sharpness

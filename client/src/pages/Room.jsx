@@ -15,6 +15,7 @@ export function Room({
   roomId,
   joinToken,
   roomStatus,
+  isPeerReconnecting = false,
   isOwner,
   myDeviceName,
   peerDeviceName,
@@ -31,6 +32,7 @@ export function Room({
   transfers = [],
   isWakeLockActive = false,
   onFilesSelected = () => {},
+  onRetryTransfer = () => {},
   onCancelTransfer = () => {},
   onClearCompleted = () => {}
 }) {
@@ -347,10 +349,34 @@ export function Room({
         peerDeviceName={peerDeviceName}
         isOwner={isOwner}
         isConnected={isConnected}
+        isPeerReconnecting={isPeerReconnecting}
         isP2PConnected={isP2PConnected}
         connectionType={connectionType}
         connectionStats={connectionStats}
       />
+
+      {/* Peer Reconnecting Banner (Grace Period Notice) */}
+      {isPeerReconnecting && !isTerminated && (
+        <div
+          className="card animate-entrance"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '10px',
+            padding: '12px 18px',
+            background: 'rgba(250, 204, 21, 0.1)',
+            border: '1px solid rgba(250, 204, 21, 0.3)',
+            borderRadius: 'var(--radius-lg)',
+            color: 'var(--color-warning)',
+            fontWeight: 600,
+            fontSize: '0.88rem'
+          }}
+        >
+          <span style={{ animation: 'spin 1.5s linear infinite', display: 'inline-block' }}>🔄</span>
+          <span>Peer reconnecting... Waiting for connection to restore</span>
+        </div>
+      )}
 
       {/* Terminated State Banner */}
       {isTerminated && (
@@ -473,6 +499,7 @@ export function Room({
                 <TransferQueue
                   transfers={transfers}
                   onCancelTransfer={onCancelTransfer}
+                  onRetryTransfer={onRetryTransfer}
                   onClearCompleted={onClearCompleted}
                 />
               </div>

@@ -35,11 +35,11 @@ export function createSignalingServer(httpServer, roomManager) {
     }
   });
 
-  // Keep-alive heartbeat interval (every 30s)
+  // Keep-alive heartbeat interval (every 25s with terminate on missed pong)
   const heartbeatInterval = setInterval(() => {
     wss.clients.forEach(ws => {
       if (ws.isAlive === false) {
-        // Socket did not respond to last ping
+        // Socket did not respond to last ping -> terminate immediately to trigger grace period
         return ws.terminate();
       }
       ws.isAlive = false;
@@ -49,7 +49,7 @@ export function createSignalingServer(httpServer, roomManager) {
         ws.terminate();
       }
     });
-  }, 30000);
+  }, 25000);
 
   if (heartbeatInterval.unref) {
     heartbeatInterval.unref();
@@ -69,24 +69,13 @@ export function createSignalingServer(httpServer, roomManager) {
 
     ws.on('close', () => {
       const result = roomManager.handleSocketDisconnect(ws);
-      if (result && result.remainingPeer && result.remainingPeer.ws) {
-        // In MVP: notify remaining peer that other peer left and room closed
+      if (result && result.status === 'grace_period' && result.remainingPeer && result.remainingPeer.ws) {
+        // Notify other peer that peer disconnected without tearing down the room
         sendJson(result.remainingPeer.ws, {
-          type: 'peer:left',
+          type: 'peer:disconnected',
           version: 1,
-          peerId: result.disconnectedPeerId,
-          reason: 'disconnected'
+          peerId: result.disconnectedPeerId
         });
-        sendJson(result.remainingPeer.ws, {
-          type: 'room:closed',
-          version: 1,
-          reason: 'peer_disconnected'
-        });
-        try {
-          result.remainingPeer.ws.close(1000, 'Peer disconnected');
-        } catch {
-          // ignore
-        }
       }
     });
 

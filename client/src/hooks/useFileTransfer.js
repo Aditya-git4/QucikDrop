@@ -17,6 +17,7 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
   const sendQueueRef = useRef([]);
   const isSendingRef = useRef(false);
   const wakeLockRef = useRef(null);
+  const processSendQueueRef = useRef(null);
 
   // Screen Wake Lock API: Keep phone screen awake during active file transfers
   useEffect(() => {
@@ -103,13 +104,20 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
     } finally {
       isSendingRef.current = false;
       // Process next item if any
-      processSendQueue();
+      processSendQueueRef.current?.();
     }
   }, []);
+
+  processSendQueueRef.current = processSendQueue;
 
   // Initialize FileTransferManager when peerConnection or signalingClient is ready
   useEffect(() => {
     if (!peerConnection && !signalingClient) return;
+
+    if (managerRef.current) {
+      managerRef.current.destroy();
+      managerRef.current = null;
+    }
 
     const manager = new FileTransferManager(peerConnection, signalingClient);
     managerRef.current = manager;
@@ -194,6 +202,10 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
 
     const handleTransferError = (data) => {
       hapticError();
+      const isInterrupted = data.code === 'TRANSFER_INTERRUPTED' || data.error === 'Transfer interrupted';
+      const statusText = isInterrupted ? 'interrupted' : 'error';
+      const messageText = isInterrupted ? 'Transfer interrupted' : (data.message || data.error);
+
       setTransfers((prev) => {
         const existing = prev.find((t) => t.transferId === data.transferId);
         if (existing) {
@@ -201,8 +213,8 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
             t.transferId === data.transferId
               ? {
                   ...t,
-                  status: 'error',
-                  errorMessage: data.message,
+                  status: statusText,
+                  errorMessage: messageText,
                   errorCode: data.code,
                   speed: 0
                 }
@@ -213,11 +225,11 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
           ...prev,
           {
             transferId: data.transferId,
-            fileName: 'Transfer Error',
+            fileName: data.fileName || (isInterrupted ? 'Transfer' : 'Transfer Error'),
             fileSize: 0,
-            direction: 'receive',
-            status: 'error',
-            errorMessage: data.message,
+            direction: data.direction || 'receive',
+            status: statusText,
+            errorMessage: messageText,
             errorCode: data.code,
             bytesTransferred: 0,
             percent: 0,
@@ -236,29 +248,32 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
 
     // Auto-drain send queue when WebRTC P2P DataChannels open
     const handleReady = () => {
-      processSendQueue();
+      processSendQueueRef.current?.();
     };
     peerConnection?.on('ready', handleReady);
 
     // Auto-drain send queue when room/signaling is connected
     const handleSignalingReady = () => {
-      processSendQueue();
+      processSendQueueRef.current?.();
     };
     signalingClient?.on('peerJoined', handleSignalingReady);
     signalingClient?.on('roomJoined', handleSignalingReady);
 
     // If either channel is already open, immediately attempt to drain any queued files
     if (peerConnection?.fileChannel?.readyState === 'open' || signalingClient?.isConnected) {
-      processSendQueue();
+      processSendQueueRef.current?.();
     }
 
     return () => {
       peerConnection?.off('ready', handleReady);
       signalingClient?.off('peerJoined', handleSignalingReady);
       signalingClient?.off('roomJoined', handleSignalingReady);
-      managerRef.current = null;
+      if (managerRef.current) {
+        managerRef.current.destroy();
+        managerRef.current = null;
+      }
     };
-  }, [peerConnection, signalingClient, processSendQueue]);
+  }, [peerConnection, signalingClient]);
 
   /** Queue multiple files for sending (works immediately, auto-beams upon P2P connect) */
   const queueFiles = useCallback(
@@ -286,7 +301,8 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
           bytesTransferred: 0,
           percent: 0,
           speed: 0,
-          downloadUrl: null
+          downloadUrl: null,
+          file
         }))
       ]);
 
@@ -294,6 +310,14 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
     },
     [processSendQueue]
   );
+
+  /** Retry a failed transfer */
+  const retryTransfer = useCallback((transfer) => {
+    if (transfer?.file) {
+      setTransfers((prev) => prev.filter((t) => t.transferId !== transfer.transferId));
+      queueFiles([transfer.file]);
+    }
+  }, [queueFiles]);
 
   /** Cancel an active or queued transfer */
   const cancelTransfer = useCallback((transferId) => {
@@ -313,6 +337,7 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
   return {
     transfers,
     queueFiles,
+    retryTransfer,
     cancelTransfer,
     clearCompleted,
     isWakeLockActive

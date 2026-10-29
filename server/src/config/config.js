@@ -22,6 +22,7 @@ export const config = {
   // Room lifecycle
   roomTtlMs: parseInt(process.env.ROOM_TTL_MS || '600000', 10), // 10 minutes default
   maxRoomLifetimeMs: parseInt(process.env.MAX_ROOM_LIFETIME_MS || '3600000', 10), // 1 hour max
+  roomReconnectGraceMs: parseInt(process.env.ROOM_RECONNECT_GRACE_MS || '60000', 10), // 60 seconds grace period
   maxRooms: parseInt(process.env.MAX_ROOMS || '100', 10),
 
   // Message & payload limits

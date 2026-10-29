@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { config } from '../config/config.js';
 import {
   generateRoomId,
@@ -15,9 +16,12 @@ import {
  * @typedef {Object} RoomMember
  * @property {string} peerId
  * @property {string} deviceName
- * @property {import('ws').WebSocket} ws
+ * @property {import('ws').WebSocket | null} ws
  * @property {PeerRole} role
  * @property {number} joinedAt
+ * @property {string} hashedPeerSecret
+ * @property {number | null} disconnectedAt
+ * @property {NodeJS.Timeout | null} graceTimer
  * 
  * @typedef {Object} Room
  * @property {string} roomId
@@ -32,6 +36,7 @@ import {
  * @property {Map<string, RoomMember>} members
  * @property {number} roomGeneration
  * @property {NodeJS.Timeout | null} cleanupTimer
+ * @property {number} [lastThrottledTouch]
  */
 
 export class RoomManager {
@@ -43,6 +48,7 @@ export class RoomManager {
 
     this.roomTtlMs = options.roomTtlMs ?? config.roomTtlMs;
     this.maxRoomLifetimeMs = options.maxRoomLifetimeMs ?? config.maxRoomLifetimeMs;
+    this.roomReconnectGraceMs = options.roomReconnectGraceMs ?? config.roomReconnectGraceMs;
     this.maxRooms = options.maxRooms ?? config.maxRooms;
     this.requireJoinApproval = options.requireJoinApproval ?? config.requireJoinApproval;
     this.generationCounter = 0;
@@ -92,6 +98,8 @@ export class RoomManager {
     const rawJoinToken = generateJoinToken();
     const joinTokenHash = hashToken(rawJoinToken);
     const ownerPeerId = generatePeerId();
+    const ownerPeerSecret = crypto.randomBytes(32).toString('hex');
+    const hashedPeerSecret = hashToken(ownerPeerSecret);
     const deviceName = sanitizeDeviceName(rawDeviceName);
 
     const now = Date.now();
@@ -121,7 +129,10 @@ export class RoomManager {
       deviceName,
       ws: ownerWs,
       role: 'owner',
-      joinedAt: now
+      joinedAt: now,
+      hashedPeerSecret,
+      disconnectedAt: null,
+      graceTimer: null
     });
 
     this.bindSocket(ownerWs, roomId, ownerPeerId);
@@ -134,6 +145,7 @@ export class RoomManager {
       roomId,
       rawJoinToken,
       ownerPeerId,
+      ownerPeerSecret,
       expiresAt
     };
   }
@@ -144,7 +156,7 @@ export class RoomManager {
    * @param {string} rawJoinToken
    * @param {import('ws').WebSocket} joinerWs
    * @param {string} rawDeviceName
-   * @returns {{ joinerPeerId: string, ownerPeerId: string, ownerDeviceName: string }}
+   * @returns {{ joinerPeerId: string, joinerPeerSecret: string, ownerPeerId: string, ownerDeviceName: string }}
    */
   joinRoom(roomId, rawJoinToken, joinerWs, rawDeviceName) {
     const room = this.rooms.get(roomId);
@@ -191,6 +203,8 @@ export class RoomManager {
     room.joinTokenUsed = true;
 
     const joinerPeerId = generatePeerId();
+    const joinerPeerSecret = crypto.randomBytes(32).toString('hex');
+    const hashedPeerSecret = hashToken(joinerPeerSecret);
     const deviceName = sanitizeDeviceName(rawDeviceName);
 
     room.members.set(joinerPeerId, {
@@ -198,7 +212,10 @@ export class RoomManager {
       deviceName,
       ws: joinerWs,
       role: 'joiner',
-      joinedAt: now
+      joinedAt: now,
+      hashedPeerSecret,
+      disconnectedAt: null,
+      graceTimer: null
     });
 
     room.status = 'connected';
@@ -209,6 +226,7 @@ export class RoomManager {
 
     return {
       joinerPeerId,
+      joinerPeerSecret,
       ownerPeerId: room.ownerPeerId,
       ownerDeviceName: owner ? owner.deviceName : 'Host'
     };
@@ -272,7 +290,25 @@ export class RoomManager {
     const memberPeerIds = [];
     for (const [peerId, member] of room.members.entries()) {
       memberPeerIds.push(peerId);
-      this.unbindSocket(member.ws);
+      if (member.graceTimer) {
+        clearTimeout(member.graceTimer);
+        member.graceTimer = null;
+      }
+      if (member.ws) {
+        this.unbindSocket(member.ws);
+        if (member.ws.readyState === 1 /* OPEN */) {
+          try {
+            member.ws.send(JSON.stringify({
+              type: 'room:closed',
+              version: 1,
+              reason: reason || 'room_closed'
+            }));
+            member.ws.close(1000, reason || 'Room closed');
+          } catch {
+            // ignore
+          }
+        }
+      }
     }
 
     this.rooms.delete(room.roomId);
@@ -280,10 +316,11 @@ export class RoomManager {
   }
 
   /**
-   * Handle peer socket disconnection.
-   * In MVP: when either peer disconnects, close the room and notify the other peer.
+   * Handle peer socket disconnection with grace period.
+   * On socket close, DO NOT destroy the room. Set member.ws = null, record disconnectedAt,
+   * start a per-member grace timer, and notify the other peer without closing the other peer's socket.
    * @param {import('ws').WebSocket} ws
-   * @returns {{ room: Room, disconnectedPeerId: string, remainingPeer: RoomMember | null } | null}
+   * @returns {{ status: 'grace_period', roomId: string, disconnectedPeerId: string, remainingPeer: RoomMember | null } | null}
    */
   handleSocketDisconnect(ws) {
     const binding = this.getSocketBinding(ws);
@@ -295,21 +332,126 @@ export class RoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return null;
 
-    // Find the remaining peer if any
-    let remainingPeer = null;
-    for (const [id, member] of room.members.entries()) {
-      if (id !== peerId) {
-        remainingPeer = member;
+    const member = room.members.get(peerId);
+    if (member) {
+      member.ws = null;
+      member.disconnectedAt = Date.now();
+
+      if (member.graceTimer) {
+        clearTimeout(member.graceTimer);
+      }
+
+      member.graceTimer = setTimeout(() => {
+        this.handleGraceTimeout(roomId, peerId);
+      }, this.roomReconnectGraceMs);
+
+      if (member.graceTimer.unref) {
+        member.graceTimer.unref();
       }
     }
 
-    // Teardown the room
-    this.destroyRoom(room, 'closed', 'peer_disconnected');
+    // Find the remaining peer if any with active socket
+    let remainingPeer = null;
+    for (const [id, m] of room.members.entries()) {
+      if (id !== peerId && m.ws) {
+        remainingPeer = m;
+        break;
+      }
+    }
 
     return {
+      status: 'grace_period',
       roomId,
       disconnectedPeerId: peerId,
       remainingPeer
+    };
+  }
+
+  /**
+   * Called when a disconnected member's grace period expires.
+   * Destroys the room and sends room:closed (reason 'peer_timeout') to the remaining peer.
+   * @param {string} roomId
+   * @param {string} peerId
+   */
+  handleGraceTimeout(roomId, peerId) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    const member = room.members.get(peerId);
+    if (member && member.ws === null) {
+      this.destroyRoom(room, 'closed', 'peer_timeout');
+    }
+  }
+
+  /**
+   * Rejoin an active room during the grace period using a persistent peerSecret.
+   * @param {string} roomId
+   * @param {string} peerId
+   * @param {string} peerSecret
+   * @param {import('ws').WebSocket} newWs
+   * @param {string} [rawDeviceName]
+   * @returns {{ room: Room, peerId: string, member: RoomMember, otherPeer: RoomMember | null }}
+   */
+  rejoinRoom(roomId, peerId, peerSecret, newWs, rawDeviceName) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.status === 'closed' || room.status === 'expired') {
+      const err = new Error('Invalid rejoin: room not available');
+      err.code = 'INVALID_REJOIN';
+      throw err;
+    }
+
+    const member = room.members.get(peerId);
+    if (!member || !member.hashedPeerSecret || typeof peerSecret !== 'string') {
+      const err = new Error('Invalid rejoin: peer not found or missing secret');
+      err.code = 'INVALID_REJOIN';
+      throw err;
+    }
+
+    const isValidSecret = verifyToken(peerSecret, member.hashedPeerSecret);
+    if (!isValidSecret) {
+      const err = new Error('Invalid rejoin: token verification failed');
+      err.code = 'INVALID_REJOIN';
+      throw err;
+    }
+
+    // Cancel grace timer
+    if (member.graceTimer) {
+      clearTimeout(member.graceTimer);
+      member.graceTimer = null;
+    }
+    member.disconnectedAt = null;
+
+    // Close any previous half-open socket
+    if (member.ws && member.ws !== newWs) {
+      try {
+        this.unbindSocket(member.ws);
+        member.ws.close(1000, 'Replaced by new connection');
+      } catch {
+        // ignore
+      }
+    }
+
+    member.ws = newWs;
+    if (rawDeviceName) {
+      member.deviceName = sanitizeDeviceName(rawDeviceName);
+    }
+
+    this.bindSocket(newWs, roomId, peerId);
+    this.touchActivity(roomId);
+
+    let otherPeer = null;
+    for (const [id, m] of room.members.entries()) {
+      if (id !== peerId) {
+        otherPeer = m;
+        break;
+      }
+    }
+
+    return {
+      room,
+      peerId,
+      member,
+      otherPeer
     };
   }
 
@@ -364,14 +506,22 @@ export class RoomManager {
   /**
    * Update room activity on genuine data exchange (e.g. text message or file transfer).
    * Dynamically extends idle TTL up to the hard maximum lifetime.
-   * Protocol heartbeats (ping/pong) must NOT call this method.
+   * Throttled on binary relay (at most once per 5 seconds).
    * @param {string} roomId
+   * @param {boolean} [throttled=false]
    */
-  touchActivity(roomId) {
+  touchActivity(roomId, throttled = false) {
     const room = this.rooms.get(roomId);
     if (!room || room.status !== 'connected') return;
 
     const now = Date.now();
+    if (throttled && room.lastThrottledTouch && now - room.lastThrottledTouch < 5000) {
+      return;
+    }
+    if (throttled) {
+      room.lastThrottledTouch = now;
+    }
+
     if (now > room.maxExpiresAt) {
       this.expireRoom(roomId, room.roomGeneration);
       return;

@@ -11,7 +11,7 @@ import { hapticTap, playSuccessSound } from '../utils/soundEffects.js';
  *   onCancelTransfer: (id: string) => void
  * }} props
  */
-export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = null }) {
+export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = null, onRetryTransfer = null }) {
   const [isZipping, setIsZipping] = useState(false);
   const [zipPercent, setZipPercent] = useState(0);
 
@@ -135,6 +135,7 @@ export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = 
             key={t.transferId}
             transfer={t}
             onCancel={onCancelTransfer}
+            onRetry={onRetryTransfer}
           />
         ))}
       </div>

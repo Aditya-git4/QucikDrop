@@ -35,13 +35,14 @@ function getFileIcon(fileName = '', mimeType = '', isSend = false) {
   return isSend ? '📤' : '📥';
 }
 
-export function TransferItem({ transfer, onCancel }) {
+export function TransferItem({ transfer, onCancel, onRetry }) {
   const [showLightbox, setShowLightbox] = useState(false);
 
   const isSend = transfer.direction === 'send';
   const isCompleted = transfer.status === 'completed';
   const isCancelled = transfer.status === 'cancelled';
-  const isError = transfer.status === 'error';
+  const isInterrupted = transfer.status === 'interrupted' || transfer.errorCode === 'TRANSFER_INTERRUPTED';
+  const isError = (transfer.status === 'error' || isInterrupted) && !isCancelled && !isCompleted;
   const isTransferring = transfer.status === 'transferring';
   const isQueued = transfer.status === 'queued';
 
@@ -57,7 +58,9 @@ export function TransferItem({ transfer, onCancel }) {
           padding: '16px',
           backgroundColor: 'var(--glass-surface-2)',
           border: `1px solid ${
-            isError
+            isInterrupted
+              ? 'rgba(250, 204, 21, 0.35)'
+              : isError
               ? 'var(--color-danger-border)'
               : isCompleted
               ? 'var(--color-success-border)'
@@ -138,6 +141,19 @@ export function TransferItem({ transfer, onCancel }) {
                     [SHA-256: {transfer.fileHash.slice(0, 8)}...]
                   </span>
                 )}
+                {isError && (
+                  <div
+                    style={{
+                      color: isInterrupted ? 'var(--color-warning)' : 'var(--color-danger)',
+                      fontSize: '0.74rem',
+                      marginTop: '4px'
+                    }}
+                  >
+                    {isInterrupted
+                      ? 'Transfer interrupted'
+                      : transfer.errorMessage || transfer.error || 'Connection dropped. Tap Retry to resend.'}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -184,10 +200,48 @@ export function TransferItem({ transfer, onCancel }) {
               </span>
             )}
 
-            {isError && (
-              <span className="badge badge-error" style={{ fontSize: '0.74rem' }}>
-                ✕ Failed
-              </span>
+            {isInterrupted && (
+              <>
+                <span
+                  className="badge badge-waiting"
+                  style={{
+                    fontSize: '0.74rem',
+                    backgroundColor: 'rgba(250, 204, 21, 0.15)',
+                    color: 'var(--color-warning)',
+                    borderColor: 'rgba(250, 204, 21, 0.3)'
+                  }}
+                >
+                  ⚠️ Interrupted
+                </span>
+                {isSend && transfer.file && onRetry && (
+                  <button
+                    type="button"
+                    onClick={() => onRetry(transfer)}
+                    className="btn btn-secondary"
+                    style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+                  >
+                    🔄 Retry
+                  </button>
+                )}
+              </>
+            )}
+
+            {isError && !isInterrupted && (
+              <>
+                <span className="badge badge-error" style={{ fontSize: '0.74rem' }}>
+                  ✕ Failed
+                </span>
+                {isSend && transfer.file && onRetry && (
+                  <button
+                    type="button"
+                    onClick={() => onRetry(transfer)}
+                    className="btn btn-secondary"
+                    style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+                  >
+                    🔄 Retry
+                  </button>
+                )}
+              </>
             )}
 
             {isTransferring && (

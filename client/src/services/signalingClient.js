@@ -1,3 +1,5 @@
+import { debugLogger } from '../utils/debugLogger.js';
+
 /**
  * SignalingClient manages the WebSocket connection and protocol message handling
  * with the QuickDrop signaling server.
@@ -14,6 +16,32 @@ export class SignalingClient {
     this.maxReconnectAttempts = 3;
     this.reconnectTimer = null;
     this.explicitClose = false;
+    this.activeSession = null;
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          if (!this.isConnected && this.serverUrl && !this.explicitClose) {
+            this.connect(this.serverUrl).catch(() => {});
+          }
+        }
+      });
+    }
+  }
+
+  /**
+   * Set active room session to enable seamless rejoin on reconnect.
+   * @param {{ roomId: string, peerId: string, peerSecret: string, deviceName?: string }} session
+   */
+  setActiveSession(session) {
+    this.activeSession = session;
+  }
+
+  /**
+   * Clear stored room session on room close, leave or expiry.
+   */
+  clearActiveSession() {
+    this.activeSession = null;
   }
 
   /**
@@ -90,12 +118,28 @@ export class SignalingClient {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
         }
+        debugLogger.logStateChange('WS', 'OPEN', null, null, this);
         this.emit('connected');
+
+        if (this.activeSession && this.activeSession.roomId && this.activeSession.peerSecret) {
+          try {
+            this.rejoinRoom(
+              this.activeSession.roomId,
+              this.activeSession.peerId,
+              this.activeSession.peerSecret,
+              this.activeSession.deviceName
+            );
+          } catch (err) {
+            console.warn('Failed to send rejoin on socket open:', err);
+          }
+        }
+
         resolve();
       };
 
       this.ws.onclose = (event) => {
         this.isConnected = false;
+        debugLogger.logStateChange('WS', 'CLOSED', { code: event.code, reason: event.reason || 'none' }, null, this);
         this.emit('disconnected', { code: event.code, reason: event.reason });
 
         // Safe bounded reconnection attempt if not explicitly closed
@@ -105,6 +149,7 @@ export class SignalingClient {
       };
 
       this.ws.onerror = (err) => {
+        debugLogger.logStateChange('WS', 'ERROR', err?.message || 'WebSocket error', null, this);
         this.emit('error', err);
       };
 
@@ -123,6 +168,7 @@ export class SignalingClient {
     this.reconnectAttempts++;
     const delay = Math.min(10000, Math.pow(2, this.reconnectAttempts - 1) * 1000);
 
+    debugLogger.logStateChange('WS', 'RECONNECTING', { attempt: this.reconnectAttempts, max: this.maxReconnectAttempts, delay }, null, this);
     this.emit('reconnecting', { attempt: this.reconnectAttempts, max: this.maxReconnectAttempts, delay });
 
     this.reconnectTimer = setTimeout(() => {
@@ -139,11 +185,15 @@ export class SignalingClient {
    */
   handleMessage(rawData) {
     if (rawData instanceof ArrayBuffer) {
+      debugLogger.logIncoming('file:chunk', 'websocket', null, this, { size: rawData.byteLength });
       this.emit('fileChunk', rawData);
       return;
     }
     if (typeof Blob !== 'undefined' && rawData instanceof Blob) {
-      rawData.arrayBuffer().then((buf) => this.emit('fileChunk', buf)).catch(() => {});
+      rawData.arrayBuffer().then((buf) => {
+        debugLogger.logIncoming('file:chunk', 'websocket', null, this, { size: buf.byteLength });
+        this.emit('fileChunk', buf);
+      }).catch(() => {});
       return;
     }
 
@@ -156,6 +206,7 @@ export class SignalingClient {
     }
 
     if (!message || typeof message.type !== 'string') return;
+    debugLogger.logIncoming(message.type, 'websocket', null, this, message);
 
     switch (message.type) {
       case 'file:start':
@@ -178,9 +229,21 @@ export class SignalingClient {
         this.emit('roomJoined', message);
         break;
 
+      case 'room:rejoined':
+        this.emit('roomRejoined', message);
+        break;
+
       case 'peer:joined':
       case 'peer':
         this.emit('peerJoined', message);
+        break;
+
+      case 'peer:disconnected':
+        this.emit('peerDisconnected', message);
+        break;
+
+      case 'peer:reconnected':
+        this.emit('peerReconnected', message);
         break;
 
       case 'peer:left':
@@ -216,6 +279,9 @@ export class SignalingClient {
         break;
 
       case 'room:error':
+        if (['INVALID_ROOM', 'INVALID_TOKEN', 'INVALID_REJOIN', 'ROOM_EXPIRED', 'ROOM_FULL', 'TOKEN_USED'].includes(message.code)) {
+          this.clearActiveSession();
+        }
         this.emit('roomError', message);
         break;
 
@@ -236,6 +302,7 @@ export class SignalingClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket is not connected');
     }
+    debugLogger.logOutgoing(payload?.type || 'unknown', 'websocket', null, this, payload);
     this.ws.send(JSON.stringify(payload));
   }
 
@@ -263,6 +330,25 @@ export class SignalingClient {
       version: 1,
       roomId,
       joinToken,
+      deviceName
+    });
+  }
+
+  /**
+   * Send room rejoin request with persistent peer secret.
+   * Never logs peer secret.
+   * @param {string} roomId
+   * @param {string} peerId
+   * @param {string} peerSecret
+   * @param {string} [deviceName]
+   */
+  rejoinRoom(roomId, peerId, peerSecret, deviceName) {
+    this.send({
+      type: 'room:rejoin',
+      version: 1,
+      roomId,
+      peerId,
+      peerSecret,
       deviceName
     });
   }

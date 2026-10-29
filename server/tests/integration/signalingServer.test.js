@@ -334,4 +334,196 @@ describe('Signaling Server Integration', () => {
 
     wsA.close();
   });
+
+  it('joiner socket drops, room survives, remaining peer socket stays open, rejoin with correct secret works', async () => {
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host PC' }));
+    const createRes = await nextMessage(wsA);
+    const { roomId, joinToken } = createRes;
+
+    const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB.on('open', resolve));
+
+    wsB.send(JSON.stringify({ type: 'room:join', version: 1, roomId, joinToken, deviceName: 'Phone' }));
+    const joinRes = await nextMessage(wsB);
+    await nextMessage(wsA); // peer:joined
+
+    const { peerId: peerIdB, peerSecret: peerSecretB } = joinRes;
+
+    // 1. Joiner socket drops
+    const peerDisconnPromise = nextMessage(wsA);
+    wsB.close();
+
+    // 2. Remaining peer receives peer:disconnected
+    const disconnMsg = await peerDisconnPromise;
+    assert.equal(disconnMsg.type, 'peer:disconnected');
+    assert.equal(disconnMsg.peerId, peerIdB);
+
+    // 3. (4) The other peer's socket is NOT closed when one peer disconnects
+    assert.equal(wsA.readyState, WebSocket.OPEN);
+
+    // 4. Room survives during grace period
+    const room = roomManager.getRoom(roomId);
+    assert.ok(room);
+
+    // 5. (1) Rejoin with the correct secret works
+    const wsB2 = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB2.on('open', resolve));
+
+    const peerReconnPromise = nextMessage(wsA);
+    wsB2.send(JSON.stringify({
+      type: 'room:rejoin',
+      version: 1,
+      roomId,
+      peerId: peerIdB,
+      peerSecret: peerSecretB,
+      deviceName: 'Phone Reconnected'
+    }));
+
+    const rejoinRes = await nextMessage(wsB2);
+    assert.equal(rejoinRes.type, 'room:rejoined');
+    assert.equal(rejoinRes.roomId, roomId);
+    assert.equal(rejoinRes.peerId, peerIdB);
+
+    const reconnMsg = await peerReconnPromise;
+    assert.equal(reconnMsg.type, 'peer:reconnected');
+    assert.equal(reconnMsg.peerId, peerIdB);
+
+    wsA.close();
+    wsB2.close();
+  });
+
+  it('rejects rejoin with an incorrect secret', async () => {
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+    const createRes = await nextMessage(wsA);
+    const { roomId, joinToken } = createRes;
+
+    const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB.on('open', resolve));
+
+    wsB.send(JSON.stringify({ type: 'room:join', version: 1, roomId, joinToken, deviceName: 'Phone' }));
+    const joinRes = await nextMessage(wsB);
+    await nextMessage(wsA); // peer:joined
+
+    wsB.close();
+    await nextMessage(wsA); // peer:disconnected
+
+    const wsB2 = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB2.on('open', resolve));
+
+    wsB2.send(JSON.stringify({
+      type: 'room:rejoin',
+      version: 1,
+      roomId,
+      peerId: joinRes.peerId,
+      peerSecret: 'wrong_secret_12345678901234567890123456789012',
+      deviceName: 'Attacker'
+    }));
+
+    const errRes = await nextMessage(wsB2);
+    assert.equal(errRes.type, 'room:error');
+    assert.equal(errRes.code, 'INVALID_REJOIN');
+
+    wsA.close();
+    wsB2.close();
+  });
+
+  it('keeps remaining peer socket OPEN when one peer disconnects and rejects relay with error', async () => {
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+    const createRes = await nextMessage(wsA);
+    const { roomId, joinToken } = createRes;
+
+    const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB.on('open', resolve));
+
+    wsB.send(JSON.stringify({ type: 'room:join', version: 1, roomId, joinToken, deviceName: 'Phone' }));
+    await nextMessage(wsB);
+    await nextMessage(wsA); // peer:joined
+
+    // Disconnect wsB
+    wsB.close();
+    const disconnMsg = await nextMessage(wsA);
+    assert.equal(disconnMsg.type, 'peer:disconnected');
+
+    // 1. Verify remaining peer's socket remains OPEN (not closed by server)
+    assert.equal(wsA.readyState, WebSocket.OPEN);
+
+    // 2. When wsA attempts to send text to disconnected peer, server replies with error without closing wsA
+    wsA.send(JSON.stringify({
+      type: 'text',
+      version: 1,
+      text: 'Are you still there?'
+    }));
+    const textErr = await nextMessage(wsA);
+    assert.equal(textErr.type, 'room:error');
+    assert.equal(textErr.code, 'INVALID_MESSAGE');
+    assert.ok(textErr.message.includes('No peer connected'));
+    assert.equal(wsA.readyState, WebSocket.OPEN);
+
+    // 3. When wsA attempts to send a binary chunk to disconnected peer, server replies with PEER_UNAVAILABLE
+    const testChunk = Buffer.from('test-binary-data');
+    wsA.send(testChunk, { binary: true });
+    const chunkErr = await nextMessage(wsA);
+    assert.equal(chunkErr.type, 'room:error');
+    assert.equal(chunkErr.code, 'PEER_UNAVAILABLE');
+    assert.ok(chunkErr.message.includes('Peer unavailable'));
+    assert.equal(wsA.readyState, WebSocket.OPEN);
+
+    // 4. Fast sender sending subsequent chunks within 1s is rate-limited (at most one PEER_UNAVAILABLE per sec)
+    wsA.send(testChunk, { binary: true });
+    wsA.send(testChunk, { binary: true });
+    let extraMsg = null;
+    const timer = new Promise(resolve => setTimeout(resolve, 50));
+    const msgListener = nextMessage(wsA).then(m => { extraMsg = m; });
+    await Promise.race([timer, msgListener]);
+    assert.equal(extraMsg, null);
+
+    wsA.close();
+  });
+
+  it('grace expiry destroys the room and notifies the other peer', async () => {
+    const oldGrace = roomManager.roomReconnectGraceMs;
+    roomManager.roomReconnectGraceMs = 80; // 80ms grace period
+
+    try {
+      const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+      await new Promise(resolve => wsA.on('open', resolve));
+
+      wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+      const createRes = await nextMessage(wsA);
+      const { roomId, joinToken } = createRes;
+
+      const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+      await new Promise(resolve => wsB.on('open', resolve));
+
+      wsB.send(JSON.stringify({ type: 'room:join', version: 1, roomId, joinToken, deviceName: 'Phone' }));
+      await nextMessage(wsB);
+      await nextMessage(wsA); // peer:joined
+
+      // Disconnect wsB
+      wsB.close();
+      const disconnMsg = await nextMessage(wsA);
+      assert.equal(disconnMsg.type, 'peer:disconnected');
+
+      // Wait for grace timeout message on wsA
+      const closeMsg = await nextMessage(wsA);
+      assert.equal(closeMsg.type, 'room:closed');
+      assert.equal(closeMsg.reason, 'peer_timeout');
+
+      // Room should now be destroyed
+      assert.equal(roomManager.getRoom(roomId), undefined);
+
+      wsA.close();
+    } finally {
+      roomManager.roomReconnectGraceMs = oldGrace;
+    }
+  });
 });

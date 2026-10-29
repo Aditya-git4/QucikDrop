@@ -1,5 +1,6 @@
 import { sanitizeFileName } from '../utils/fileUtils.js';
 import { createSha256Incremental } from '../utils/cryptoUtils.js';
+import { debugLogger } from '../utils/debugLogger.js';
 
 export const CHUNK_SIZE = 16384; // 16 KiB per chunk
 export const MEMORY_TRANSFER_LIMIT = 200 * 1024 * 1024; // 200 MB in-memory buffer threshold
@@ -41,6 +42,18 @@ export class FileTransferManager {
     /** @type {Map<string, Set<Function>>} */
     this.listeners = new Map();
 
+    // Named bound handler functions for clean listener detachment
+    this.onPcControlMessage = (msg) => this.handleControlMessage(msg, 'webrtc-dc');
+    this.onPcFileChunk = (chunk) => this.handleIncomingChunk(chunk, 'webrtc-dc');
+    this.onScControlMessage = (msg) => this.handleControlMessage(msg, 'websocket');
+    this.onScFileChunk = (chunk) => this.handleIncomingChunk(chunk, 'websocket');
+    this.onScPeerDisconnected = () => this.handleTransportDisconnect('websocket', 'Transfer interrupted');
+    this.onScRoomError = (err) => {
+      if (err?.code === 'PEER_UNAVAILABLE') {
+        this.handleTransportDisconnect('websocket', 'Transfer interrupted');
+      }
+    };
+
     this.setupListeners();
   }
 
@@ -73,24 +86,183 @@ export class FileTransferManager {
 
   setupListeners() {
     if (this.peerConnection) {
-      this.peerConnection.on('controlMessage', (msg) => {
-        this.handleControlMessage(msg);
-      });
-
-      this.peerConnection.on('fileChunk', (chunk) => {
-        this.handleIncomingChunk(chunk);
-      });
+      this.peerConnection.on('controlMessage', this.onPcControlMessage);
+      this.peerConnection.on('fileChunk', this.onPcFileChunk);
     }
 
     if (this.signalingClient) {
-      this.signalingClient.on('controlMessage', (msg) => {
-        this.handleControlMessage(msg);
-      });
+      this.signalingClient.on('controlMessage', this.onScControlMessage);
+      this.signalingClient.on('fileChunk', this.onScFileChunk);
+      this.signalingClient.on('peerDisconnected', this.onScPeerDisconnected);
+      this.signalingClient.on('roomError', this.onScRoomError);
+    }
+  }
 
-      this.signalingClient.on('fileChunk', (chunk) => {
-        this.handleIncomingChunk(chunk);
+  /**
+   * Teardown FileTransferManager: unregister all listeners from peerConnection and signalingClient,
+   * clear all active timers, cancel active transfers, and clear event subscribers.
+   */
+  destroy() {
+    if (this.peerConnection) {
+      this.peerConnection.off('controlMessage', this.onPcControlMessage);
+      this.peerConnection.off('fileChunk', this.onPcFileChunk);
+    }
+
+    if (this.signalingClient) {
+      this.signalingClient.off('controlMessage', this.onScControlMessage);
+      this.signalingClient.off('fileChunk', this.onScFileChunk);
+      this.signalingClient.off('peerDisconnected', this.onScPeerDisconnected);
+      this.signalingClient.off('roomError', this.onScRoomError);
+    }
+
+    if (this.currentReceive?.completionTimeout) {
+      clearTimeout(this.currentReceive.completionTimeout);
+      this.currentReceive.completionTimeout = null;
+    }
+    this.cleanupReceive();
+
+    for (const [transferId, sendRecord] of this.activeSends.entries()) {
+      sendRecord.isCancelled = true;
+      if (sendRecord.timeoutTimer) {
+        clearTimeout(sendRecord.timeoutTimer);
+        sendRecord.timeoutTimer = null;
+      }
+    }
+    this.activeSends.clear();
+    this.listeners.clear();
+  }
+
+  /**
+   * Handle unexpected transport drop (e.g. peer disconnected during WebSocket relay).
+   * Cancels active transfers on that transport. For receiver, partial data is discarded
+   * and a neutral TRANSFER_INTERRUPTED state is emitted rather than a hash mismatch error.
+   * @param {'webrtc-dc' | 'websocket'} transport
+   * @param {string} [customMessage]
+   */
+  handleTransportDisconnect(transport, customMessage = null) {
+    const errorMsg = customMessage || 'Transfer interrupted';
+
+    // 1. Cancel matching active sends
+    for (const [transferId, sendRecord] of this.activeSends.entries()) {
+      if (sendRecord.transport === transport) {
+        sendRecord.isCancelled = true;
+        if (sendRecord.timeoutTimer) {
+          clearTimeout(sendRecord.timeoutTimer);
+          sendRecord.timeoutTimer = null;
+        }
+        this.activeSends.delete(transferId);
+        this.emit('transferError', {
+          transferId,
+          error: errorMsg,
+          code: 'TRANSFER_INTERRUPTED',
+          message: errorMsg,
+          direction: 'send'
+        });
+      }
+    }
+
+    // 2. Discard partial receive buffer and emit neutral interrupted state
+    if (this.currentReceive && this.currentReceive.transport === transport) {
+      const receiveTransferId = this.currentReceive.transferId;
+      const fileName = this.currentReceive.fileName;
+      this.currentReceive.isCancelled = true;
+      if (this.currentReceive.completionTimeout) {
+        clearTimeout(this.currentReceive.completionTimeout);
+        this.currentReceive.completionTimeout = null;
+      }
+      this.cleanupReceive();
+
+      this.emit('transferError', {
+        transferId: receiveTransferId,
+        fileName,
+        code: 'TRANSFER_INTERRUPTED',
+        error: errorMsg,
+        message: errorMsg,
+        direction: 'receive'
       });
     }
+  }
+
+  /**
+   * Send control payload on the pinned transport if available, falling back gracefully.
+   * @param {object} payload
+   * @param {'webrtc-dc' | 'websocket'} [transport]
+   */
+  sendControlOnTransport(payload, transport) {
+    if (transport === 'webrtc-dc' && this.peerConnection?.controlChannel?.readyState === 'open') {
+      this.peerConnection.sendControl(payload);
+    } else if (transport === 'websocket' && this.signalingClient?.isConnected) {
+      this.signalingClient.send({
+        ...payload,
+        version: 1
+      });
+    } else {
+      this.sendControl(payload);
+    }
+  }
+
+  /**
+   * Send file chunk on the pinned transport.
+   * @param {ArrayBuffer} chunk
+   * @param {'webrtc-dc' | 'websocket'} [transport]
+   */
+  sendFileChunkOnTransport(chunk, transport) {
+    if (transport === 'webrtc-dc' && this.peerConnection?.fileChannel?.readyState === 'open') {
+      this.peerConnection.sendFileChunk(chunk);
+    } else if (transport === 'websocket' && this.signalingClient?.isConnected && this.signalingClient.ws?.readyState === 1) {
+      debugLogger.logOutgoing('file:chunk', 'websocket', this.peerConnection, this.signalingClient, { size: chunk?.byteLength });
+      this.signalingClient.ws.send(chunk);
+    } else {
+      this.sendFileChunk(chunk);
+    }
+  }
+
+  /**
+   * Wait for buffered amount low on the pinned transport.
+   * @param {'webrtc-dc' | 'websocket'} [transport]
+   * @returns {Promise<void>}
+   */
+  waitForBufferedAmountLowOnTransport(transport) {
+    if (transport === 'webrtc-dc' && this.peerConnection?.fileChannel?.readyState === 'open') {
+      return this.peerConnection.waitForBufferedAmountLow();
+    }
+    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 15);
+    });
+  }
+
+  /**
+   * Wait for all queued bytes to drain on the pinned transport.
+   * @param {'webrtc-dc' | 'websocket'} [transport]
+   * @returns {Promise<void>}
+   */
+  waitForFileDrainedOnTransport(transport) {
+    if (
+      transport === 'webrtc-dc' &&
+      this.peerConnection?.fileChannel?.readyState === 'open' &&
+      typeof this.peerConnection.waitForFileChannelDrained === 'function'
+    ) {
+      return this.peerConnection.waitForFileChannelDrained();
+    }
+    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount === 0) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 10);
+    });
   }
 
   /**
@@ -118,6 +290,7 @@ export class FileTransferManager {
     if (this.peerConnection?.fileChannel?.readyState === 'open') {
       this.peerConnection.sendFileChunk(chunk);
     } else if (this.signalingClient?.isConnected && this.signalingClient.ws?.readyState === 1 /* OPEN */) {
+      debugLogger.logOutgoing('file:chunk', 'websocket', this.peerConnection, this.signalingClient, { size: chunk?.byteLength });
       this.signalingClient.ws.send(chunk);
     } else {
       throw new Error('No peer or signaling connection available to stream file chunk');
@@ -172,13 +345,14 @@ export class FileTransferManager {
   /**
    * Handle incoming control channel messages for file transfers.
    * @param {any} msg
+   * @param {'webrtc-dc' | 'websocket'} [arrivalTransport]
    */
-  handleControlMessage(msg) {
+  handleControlMessage(msg, arrivalTransport = null) {
     if (!msg || typeof msg.type !== 'string') return;
 
     switch (msg.type) {
       case 'file:start':
-        this.handleReceiveStart(msg);
+        this.handleReceiveStart(msg, arrivalTransport);
         break;
 
       case 'file:ready':
@@ -186,7 +360,7 @@ export class FileTransferManager {
         break;
 
       case 'file:cancel':
-        this.handleRemoteCancel(msg);
+        this.handleRemoteCancel(msg, arrivalTransport);
         break;
 
       case 'file:complete':
@@ -209,24 +383,35 @@ export class FileTransferManager {
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const hasher = createSha256Incremental();
 
+    // Pin transport once for this entire transfer
+    const isDcOpen =
+      this.peerConnection?.isP2PHealthy &&
+      this.peerConnection?.controlChannel?.readyState === 'open' &&
+      this.peerConnection?.fileChannel?.readyState === 'open' &&
+      this.peerConnection?.pc?.connectionState === 'connected';
+    const chosenTransport = isDcOpen ? 'webrtc-dc' : 'websocket';
+
     this.activeSends.set(transferId, {
       file,
       isCancelled: false,
       startTime: Date.now(),
-      hasher
+      hasher,
+      transport: chosenTransport,
+      timeoutTimer: null
     });
 
     try {
-      // 1. Notify receiver of file metadata
-      this.sendControl({
+      // 1. Notify receiver of file metadata on pinned transport
+      this.sendControlOnTransport({
         type: 'file:start',
         transferId,
         fileName: safeName,
         fileSize: file.size,
         mimeType: file.type || 'application/octet-stream',
         chunkSize: CHUNK_SIZE,
-        totalChunks
-      });
+        totalChunks,
+        transport: chosenTransport
+      }, chosenTransport);
 
       this.emit('transferStarted', {
         transferId,
@@ -247,10 +432,12 @@ export class FileTransferManager {
           this.off(`ready:${transferId}`, onReady);
           reject(new Error('Receiver handshake timed out. Peer may have disconnected.'));
         }, 10000);
+        const sendRecord = this.activeSends.get(transferId);
+        if (sendRecord) sendRecord.timeoutTimer = timeoutTimer;
         this.on(`ready:${transferId}`, onReady);
       });
 
-      // 3. Transmit file chunks with backpressure and incremental SHA-256 hashing
+      // 3. Transmit file chunks on pinned transport with backpressure and incremental SHA-256 hashing
       let offset = 0;
       const sendRecord = this.activeSends.get(transferId);
       const startTime = Date.now();
@@ -267,7 +454,7 @@ export class FileTransferManager {
         // Update cryptographic hash incrementally (O(1) memory)
         hasher.update(buffer);
 
-        this.sendFileChunk(buffer);
+        this.sendFileChunkOnTransport(buffer, chosenTransport);
         offset += buffer.byteLength;
 
         // Calculate speed and progress
@@ -284,24 +471,24 @@ export class FileTransferManager {
           direction: 'send'
         });
 
-        // Backpressure flow control
-        await this.waitForBufferedAmountLow();
+        // Backpressure flow control on pinned transport
+        await this.waitForBufferedAmountLowOnTransport(chosenTransport);
       }
 
       // 4. Drain all buffered file chunks before sending completion manifest
-      await this.waitForFileChannelDrained();
+      await this.waitForFileDrainedOnTransport(chosenTransport);
 
       // 5. Compute final verified SHA-256 hash
       const fileHash = hasher.digest();
 
-      // 6. Send completion manifest with cryptographic hash
-      this.sendControl({
+      // 6. Send completion manifest with cryptographic hash on pinned transport
+      this.sendControlOnTransport({
         type: 'file:complete',
         transferId,
         fileHash,
         totalBytes: file.size,
         totalChunks
-      });
+      }, chosenTransport);
 
       this.activeSends.delete(transferId);
 
@@ -333,10 +520,12 @@ export class FileTransferManager {
   /**
    * Handle incoming file metadata from remote peer.
    * @param {any} msg
+   * @param {'webrtc-dc' | 'websocket'} [arrivalTransport]
    */
-  handleReceiveStart(msg) {
+  handleReceiveStart(msg, arrivalTransport = null) {
     const { transferId, fileName, fileSize, mimeType, totalChunks } = msg;
     const sizeNumber = Number(fileSize);
+    const chosenTransport = arrivalTransport || (this.peerConnection?.controlChannel?.readyState === 'open' ? 'webrtc-dc' : 'websocket');
 
     // Safeguard: Check memory limit for mobile/in-memory browsers
     if (sizeNumber > MEMORY_TRANSFER_LIMIT && !isFileSystemAccessSupported) {
@@ -360,7 +549,8 @@ export class FileTransferManager {
       blobParts: [],
       hasher: createSha256Incremental(),
       startTime: Date.now(),
-      isCancelled: false
+      isCancelled: false,
+      transport: chosenTransport
     };
 
     this.emit('transferStarted', {
@@ -370,11 +560,11 @@ export class FileTransferManager {
       direction: 'receive'
     });
 
-    // Send receiver-ready handshake back to sender
-    this.sendControl({
+    // Send receiver-ready handshake back to sender on the same transport it arrived on
+    this.sendControlOnTransport({
       type: 'file:ready',
       transferId
-    });
+    }, chosenTransport);
   }
 
   /**
@@ -526,25 +716,32 @@ export class FileTransferManager {
    * @param {string} [reason='user-cancelled']
    */
   cancelTransfer(transferId, reason = 'user-cancelled') {
+    let targetTransport = null;
+
     // If sending
     if (this.activeSends.has(transferId)) {
       const sendRecord = this.activeSends.get(transferId);
-      if (sendRecord) sendRecord.isCancelled = true;
+      if (sendRecord) {
+        sendRecord.isCancelled = true;
+        targetTransport = sendRecord.transport;
+        if (sendRecord.timeoutTimer) clearTimeout(sendRecord.timeoutTimer);
+      }
       this.activeSends.delete(transferId);
     }
 
     // If receiving
     if (this.currentReceive && this.currentReceive.transferId === transferId) {
       this.currentReceive.isCancelled = true;
+      targetTransport = targetTransport || this.currentReceive.transport;
       this.cleanupReceive();
     }
 
     try {
-      this.sendControl({
+      this.sendControlOnTransport({
         type: 'file:cancel',
         transferId,
         reason
-      });
+      }, targetTransport);
     } catch {
       // ignore
     }
@@ -566,7 +763,19 @@ export class FileTransferManager {
     }
 
     if (this.currentReceive && this.currentReceive.transferId === transferId) {
+      const fileName = this.currentReceive.fileName;
       this.cleanupReceive();
+      if (reason === 'peer-disconnected' || reason === 'TRANSFER_INTERRUPTED') {
+        this.emit('transferError', {
+          transferId,
+          fileName,
+          code: 'TRANSFER_INTERRUPTED',
+          error: 'Transfer interrupted',
+          message: 'Transfer interrupted',
+          direction: 'receive'
+        });
+        return;
+      }
     }
 
     this.emit('transferCancelled', { transferId, reason: reason || 'remote-cancelled' });
