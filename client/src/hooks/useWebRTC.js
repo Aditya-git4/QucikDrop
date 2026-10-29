@@ -433,6 +433,22 @@ export function useWebRTC({
     ]);
   }, [isP2PConnected, myDeviceName, pcManager, signalingClient]);
 
+  /** Teardown and reset all WebRTC peer connection resources and messages */
+  const resetWebRTC = useCallback(() => {
+    if (pcManagerRef.current) {
+      pcManagerRef.current.close();
+    }
+    pcManagerRef.current = new PeerConnectionManager({
+      iceServers: iceServers || undefined
+    });
+    setWebrtcStatus(isRelayOnly ? 'disabled (relay-only)' : 'disconnected');
+    setIsP2PConnected(false);
+    setConnectionType(isRelayOnly ? 'relay' : 'unknown');
+    setConnectionStats(null);
+    setP2pMessages([]);
+    seenMessageIdsRef.current.clear();
+  }, [isRelayOnly, iceServers]);
+
   return {
     webrtcStatus,
     isP2PConnected,
@@ -441,6 +457,7 @@ export function useWebRTC({
     isRelayed: connectionType === 'relay',
     peerConnection: pcManager,
     p2pMessages,
-    sendP2PText
+    sendP2PText,
+    resetWebRTC
   };
 }

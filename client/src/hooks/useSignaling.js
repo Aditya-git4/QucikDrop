@@ -149,6 +149,8 @@ export function useSignaling() {
       setRoomStatus('closed');
       const reasonText = msg.reason === 'closed_by_owner' 
         ? 'The room owner closed this room.' 
+        : msg.reason === 'guest_left'
+        ? 'The other device has left the room.'
         : msg.reason === 'peer_timeout'
         ? 'The other device disconnected and did not reconnect within the grace period.'
         : 'The room has been closed.';
@@ -192,6 +194,20 @@ export function useSignaling() {
     client.on('roomError', handleRoomError);
 
     return () => {
+      client.off('connected', handleConnected);
+      client.off('disconnected', handleDisconnected);
+      client.off('reconnecting', handleReconnecting);
+      client.off('roomCreated', handleRoomCreated);
+      client.off('roomJoined', handleRoomJoined);
+      client.off('roomRejoined', handleRoomRejoined);
+      client.off('peerJoined', handlePeerJoined);
+      client.off('peerDisconnected', handlePeerDisconnected);
+      client.off('peerReconnected', handlePeerReconnected);
+      client.off('peerLeft', handlePeerLeft);
+      client.off('textMessage', handleTextMessage);
+      client.off('roomClosed', handleRoomClosed);
+      client.off('roomExpired', handleRoomExpired);
+      client.off('roomError', handleRoomError);
       client.disconnect();
     };
   }, [client]);
@@ -204,21 +220,41 @@ export function useSignaling() {
     await client.connect(wsUrl);
   }, [client]);
 
-  /** Create a new room */
-  const createRoom = useCallback(async (deviceName) => {
+  /** Start a fresh room session: resets state, ensures healthy open WebSocket, and sends room:create */
+  const startFreshSession = useCallback(async (deviceName) => {
+    const name = deviceName || myDeviceName;
+    setMyDeviceName(name);
+    setErrorMessage(null);
+    setErrorCode(null);
+
+    // Set Host role and connecting state upfront so UI never renders as Guest
+    setIsOwner(true);
+    setRoomStatus('connecting');
+    setRoomId(null);
+    setJoinToken(null);
+    setPeerId(null);
+    setPeerDeviceName(null);
+    setExpiresAt(null);
+    setIceServers(null);
+    setMessages([]);
+    setIsPeerReconnecting(false);
+
+    // Clear stored sessions
+    clearRoomSession();
+
     try {
-      const name = deviceName || myDeviceName;
-      setMyDeviceName(name);
-      setErrorMessage(null);
-      setErrorCode(null);
-      setRoomStatus('connecting');
-      await ensureConnected();
-      client.createRoom(name);
+      const wsUrl = getWebSocketUrl();
+      await client.startFreshSession(name, wsUrl);
     } catch (err) {
       setRoomStatus('error');
       setErrorMessage(err.message || 'Failed to connect to signaling server');
     }
-  }, [client, myDeviceName, ensureConnected]);
+  }, [client, myDeviceName]);
+
+  /** Create a new room */
+  const createRoom = useCallback(async (deviceName) => {
+    return startFreshSession(deviceName);
+  }, [startFreshSession]);
 
   /** Join an existing room */
   const joinRoom = useCallback(async (targetRoomId, targetJoinToken, deviceName) => {
@@ -283,7 +319,7 @@ export function useSignaling() {
     }
   }, [client, peerId, myDeviceName]);
 
-  /** Close the room */
+  /** Close the room (owner action) */
   const closeRoom = useCallback(() => {
     if (roomId) {
       clearRoomSession(roomId);
@@ -291,6 +327,20 @@ export function useSignaling() {
     client.clearActiveSession();
     try {
       client.closeRoom();
+    } catch {
+      // ignore
+    }
+    setRoomStatus('closed');
+  }, [client, roomId]);
+
+  /** Leave the room cleanly (guest action) */
+  const leaveRoom = useCallback(() => {
+    if (roomId) {
+      clearRoomSession(roomId);
+    }
+    client.clearActiveSession();
+    try {
+      client.leaveRoom();
     } catch {
       // ignore
     }
@@ -339,7 +389,9 @@ export function useSignaling() {
     rejoinRoom,
     sendMessage,
     closeRoom,
+    leaveRoom,
     reset,
+    startFreshSession,
     setMyDeviceName
   };
 }

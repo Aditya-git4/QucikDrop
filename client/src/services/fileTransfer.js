@@ -2,15 +2,25 @@ import { sanitizeFileName } from '../utils/fileUtils.js';
 import { createSha256Incremental } from '../utils/cryptoUtils.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
-export const CHUNK_SIZE = 16384; // 16 KiB per chunk
+export const RELAY_CHUNK_SIZE = 16384; // 16 KiB per chunk on WebSocket relay
+export const DC_MAX_CHUNK_SIZE = 65536; // 64 KiB upper bound for WebRTC DataChannel frames
+export const DC_MAX_PAYLOAD_LIMIT = 65536 - 8; // 65528 bytes max payload so 8-byte header + payload <= 65536
+export const CHUNK_SIZE = 16384; // Default chunk size for backwards compatibility
+export const READ_BLOCK_SIZE = 256 * 1024; // 256 KiB read buffer for file.slice()
+export const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4 MiB backpressure pause threshold for DataChannel
+export const LOW_WATER_MARK = 1 * 1024 * 1024; // 1 MiB backpressure resume threshold for DataChannel
+export const WS_HIGH_WATER_MARK = 512 * 1024; // 512 KiB backpressure pause threshold for WebSocket relay
+export const WS_LOW_WATER_MARK = 256 * 1024; // 256 KiB backpressure resume threshold for WebSocket relay
+export const PROGRESS_EMIT_INTERVAL_MS = 100; // Update progress UI only every ~100 ms
 export const MEMORY_TRANSFER_LIMIT = 200 * 1024 * 1024; // 200 MB in-memory buffer threshold
 export const isFileSystemAccessSupported =
   typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 
 /**
  * FileTransferManager orchestrates chunked file sending and receiving
- * over WebRTC data channels with incremental SHA-256 integrity verification,
- * backpressure flow control, and memory-aware buffering.
+ * over WebRTC data channels with WebSocket fallback, 8-byte framed chunks
+ * (uint32 streamId + uint32 chunkIndex), incremental SHA-256 integrity verification,
+ * backpressure flow control, handshake fallback, and memory-aware buffering.
  */
 export class FileTransferManager {
   /**
@@ -21,23 +31,44 @@ export class FileTransferManager {
     this.peerConnection = peerConnection;
     this.signalingClient = signalingClient;
 
-    /** @type {Map<string, { file: File, isCancelled: boolean, startTime: number, hasher: any }>} */
+    /** @type {number} Per-sender monotonic stream ID counter */
+    this.nextStreamId = 1;
+
+    /** @type {boolean} Sequential file sending lock */
+    this.isSending = false;
+
+    /** @type {Map<string, { transferId: string, streamId: number, file: File, isCancelled: boolean, startTime: number, hasher: any, transport: string, timeoutTimer: any }>} */
     this.activeSends = new Map();
 
-    /** @type {{
+    /** @type {Map<number, {
      *   transferId: string,
+     *   streamId: number,
      *   fileName: string,
      *   fileSize: number,
      *   mimeType: string,
      *   totalChunks: number,
      *   receivedBytes: number,
+     *   receivedChunkIndices: Set<number>,
      *   chunks: ArrayBuffer[],
      *   blobParts: Blob[],
      *   hasher: any,
      *   startTime: number,
-     *   isCancelled: boolean
-     * } | null} */
-    this.currentReceive = null;
+     *   isCancelled: boolean,
+     *   isFinished: boolean,
+     *   transport: string,
+     *   inactivityTimer: any,
+     *   completionTimeout: any,
+     *   pendingCompletion?: { expectedFileHash: string }
+     * }>} */
+    this.activeReceives = new Map();
+
+    /** @type {Map<string, number>} Fast mapping from transferId to streamId */
+    this.transferToStreamId = new Map();
+
+    /** @type {number} Handshake and inactivity timeouts */
+    this.handshakeInitialTimeoutMs = 4000;
+    this.handshakeRetryTimeoutMs = 6000;
+    this.inactivityTimeoutMs = 20000;
 
     /** @type {Map<string, Set<Function>>} */
     this.listeners = new Map();
@@ -55,6 +86,25 @@ export class FileTransferManager {
     };
 
     this.setupListeners();
+  }
+
+  get currentReceive() {
+    const list = Array.from(this.activeReceives.values());
+    return list.length > 0 ? list[list.length - 1] : null;
+  }
+
+  set currentReceive(val) {
+    if (!val) {
+      this.cleanupReceive();
+    } else {
+      const sId = val.streamId || 1;
+      val.streamId = sId;
+      val.receivedChunkIndices = val.receivedChunkIndices || new Set();
+      this.activeReceives.set(sId, val);
+      if (val.transferId) {
+        this.transferToStreamId.set(val.transferId, sId);
+      }
+    }
   }
 
   on(event, handler) {
@@ -115,10 +165,6 @@ export class FileTransferManager {
       this.signalingClient.off('roomError', this.onScRoomError);
     }
 
-    if (this.currentReceive?.completionTimeout) {
-      clearTimeout(this.currentReceive.completionTimeout);
-      this.currentReceive.completionTimeout = null;
-    }
     this.cleanupReceive();
 
     for (const [transferId, sendRecord] of this.activeSends.entries()) {
@@ -153,6 +199,7 @@ export class FileTransferManager {
         this.activeSends.delete(transferId);
         this.emit('transferError', {
           transferId,
+          streamId: sendRecord.streamId,
           error: errorMsg,
           code: 'TRANSFER_INTERRUPTED',
           message: errorMsg,
@@ -161,25 +208,23 @@ export class FileTransferManager {
       }
     }
 
-    // 2. Discard partial receive buffer and emit neutral interrupted state
-    if (this.currentReceive && this.currentReceive.transport === transport) {
-      const receiveTransferId = this.currentReceive.transferId;
-      const fileName = this.currentReceive.fileName;
-      this.currentReceive.isCancelled = true;
-      if (this.currentReceive.completionTimeout) {
-        clearTimeout(this.currentReceive.completionTimeout);
-        this.currentReceive.completionTimeout = null;
-      }
-      this.cleanupReceive();
+    // 2. Discard partial receive buffer and emit neutral interrupted state for matching receives
+    for (const [streamId, receiveRecord] of this.activeReceives.entries()) {
+      if (receiveRecord.transport === transport) {
+        const receiveTransferId = receiveRecord.transferId;
+        const fileName = receiveRecord.fileName;
+        this.cleanupStream(streamId);
 
-      this.emit('transferError', {
-        transferId: receiveTransferId,
-        fileName,
-        code: 'TRANSFER_INTERRUPTED',
-        error: errorMsg,
-        message: errorMsg,
-        direction: 'receive'
-      });
+        this.emit('transferError', {
+          transferId: receiveTransferId,
+          streamId,
+          fileName,
+          code: 'TRANSFER_INTERRUPTED',
+          error: errorMsg,
+          message: errorMsg,
+          direction: 'receive'
+        });
+      }
     }
   }
 
@@ -202,6 +247,31 @@ export class FileTransferManager {
   }
 
   /**
+   * Always send file:cancel on BOTH transports (ignoring any send errors).
+   * @param {object} payload
+   */
+  sendCancelOnBothTransports(payload) {
+    try {
+      if (this.peerConnection?.controlChannel?.readyState === 'open') {
+        this.peerConnection.sendControl(payload);
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      if (this.signalingClient?.isConnected) {
+        this.signalingClient.send({
+          ...payload,
+          version: 1
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * Send file chunk on the pinned transport.
    * @param {ArrayBuffer} chunk
    * @param {'webrtc-dc' | 'websocket'} [transport]
@@ -218,6 +288,24 @@ export class FileTransferManager {
   }
 
   /**
+   * Check if send queue should pause for backpressure based on high water marks.
+   * High water mark is ~4 MiB for WebRTC DataChannel and ~512 KiB for WebSocket relay.
+   * @param {'webrtc-dc' | 'websocket'} transport
+   * @returns {boolean}
+   */
+  shouldPauseForBackpressure(transport) {
+    if (transport === 'webrtc-dc') {
+      const buffered = this.peerConnection?.fileChannel?.bufferedAmount || 0;
+      return buffered >= HIGH_WATER_MARK;
+    }
+    if (transport === 'websocket') {
+      const buffered = this.signalingClient?.ws?.bufferedAmount || 0;
+      return buffered >= WS_HIGH_WATER_MARK;
+    }
+    return false;
+  }
+
+  /**
    * Wait for buffered amount low on the pinned transport.
    * @param {'webrtc-dc' | 'websocket'} [transport]
    * @returns {Promise<void>}
@@ -226,16 +314,16 @@ export class FileTransferManager {
     if (transport === 'webrtc-dc' && this.peerConnection?.fileChannel?.readyState === 'open') {
       return this.peerConnection.waitForBufferedAmountLow();
     }
-    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
+    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= WS_LOW_WATER_MARK) {
       return Promise.resolve();
     }
     return new Promise((resolve) => {
       const interval = setInterval(() => {
-        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
+        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= WS_LOW_WATER_MARK) {
           clearInterval(interval);
           resolve();
         }
-      }, 15);
+      }, 10);
     });
   }
 
@@ -298,51 +386,6 @@ export class FileTransferManager {
   }
 
   /**
-   * Unified backpressure handler across WebRTC and WebSocket channels.
-   * @returns {Promise<void>}
-   */
-  waitForBufferedAmountLow() {
-    if (this.peerConnection?.fileChannel?.readyState === 'open') {
-      return this.peerConnection.waitForBufferedAmountLow();
-    }
-    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      const interval = setInterval(() => {
-        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 15);
-    });
-  }
-
-  /**
-   * Unified buffer flush helper across WebRTC and WebSocket channels.
-   * @returns {Promise<void>}
-   */
-  waitForFileChannelDrained() {
-    if (
-      this.peerConnection?.fileChannel?.readyState === 'open' &&
-      typeof this.peerConnection.waitForFileChannelDrained === 'function'
-    ) {
-      return this.peerConnection.waitForFileChannelDrained();
-    }
-    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount === 0) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      const interval = setInterval(() => {
-        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount === 0) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 10);
-    });
-  }
-
-  /**
    * Handle incoming control channel messages for file transfers.
    * @param {any} msg
    * @param {'webrtc-dc' | 'websocket'} [arrivalTransport]
@@ -356,7 +399,7 @@ export class FileTransferManager {
         break;
 
       case 'file:ready':
-        this.emit(`ready:${msg.transferId}`);
+        this.emit(`ready:${msg.transferId}`, msg);
         break;
 
       case 'file:cancel':
@@ -364,7 +407,7 @@ export class FileTransferManager {
         break;
 
       case 'file:complete':
-        this.finalizeReceive(msg.transferId, msg.fileHash);
+        this.finalizeReceive(msg.transferId, msg.fileHash, msg.streamId);
         break;
 
       default:
@@ -373,14 +416,22 @@ export class FileTransferManager {
   }
 
   /**
-   * Initiate sending a file with incremental SHA-256 cryptographic verification.
+   * Initiate sending a file with incremental SHA-256 cryptographic verification,
+   * 8-byte framed chunks, sequential send enforcement, and handshake fallback.
    * @param {File} file
    * @returns {Promise<string>} transferId
    */
   async sendFile(file) {
+    if (this.isSending) {
+      throw new Error('A file transfer is already in progress. Sequential sending is enforced.');
+    }
+    this.isSending = true;
+
     const transferId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const streamId = (this.nextStreamId++ >>> 0);
+    if (this.nextStreamId > 0x7fffffff) this.nextStreamId = 1;
+
     const safeName = sanitizeFileName(file.name);
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const hasher = createSha256Incremental();
 
     // Pin transport once for this entire transfer
@@ -389,105 +440,221 @@ export class FileTransferManager {
       this.peerConnection?.controlChannel?.readyState === 'open' &&
       this.peerConnection?.fileChannel?.readyState === 'open' &&
       this.peerConnection?.pc?.connectionState === 'connected';
-    const chosenTransport = isDcOpen ? 'webrtc-dc' : 'websocket';
+    let chosenTransport = isDcOpen ? 'webrtc-dc' : 'websocket';
 
-    this.activeSends.set(transferId, {
+    // Payload size: min(pc.sctp.maxMessageSize, 65536) - 8 so that header (8 bytes) + payload never exceeds maxMessageSize.
+    // If maxMessageSize is unknown, use 16384.
+    const localSctpMax = this.peerConnection?.getMaxMessageSize
+      ? this.peerConnection.getMaxMessageSize()
+      : (this.peerConnection?.pc?.sctp?.maxMessageSize || 16384);
+    const dcPayloadSize = Math.max(1024, Math.min(localSctpMax, 65536) - 8);
+    const proposedChunkSize = chosenTransport === 'webrtc-dc' ? dcPayloadSize : RELAY_CHUNK_SIZE;
+    let negotiatedChunkSize = proposedChunkSize;
+
+    const sendRecord = {
+      transferId,
+      streamId,
       file,
       isCancelled: false,
       startTime: Date.now(),
       hasher,
       transport: chosenTransport,
       timeoutTimer: null
-    });
+    };
+    this.activeSends.set(transferId, sendRecord);
 
     try {
-      // 1. Notify receiver of file metadata on pinned transport
-      this.sendControlOnTransport({
-        type: 'file:start',
-        transferId,
-        fileName: safeName,
-        fileSize: file.size,
-        mimeType: file.type || 'application/octet-stream',
-        chunkSize: CHUNK_SIZE,
-        totalChunks,
-        transport: chosenTransport
-      }, chosenTransport);
-
-      this.emit('transferStarted', {
-        transferId,
-        fileName: safeName,
-        fileSize: file.size,
-        direction: 'send'
-      });
-
-      // 2. Wait for receiver-ready handshake with timeout protection
+      // 1. Setup handshake promise and register listener BEFORE transmitting file:start
       await new Promise((resolve, reject) => {
-        let timeoutTimer = null;
-        const onReady = () => {
-          if (timeoutTimer) clearTimeout(timeoutTimer);
+        let isResolved = false;
+
+        const onReady = (readyMsg) => {
+          if (isResolved) return;
+          isResolved = true;
+          if (sendRecord.timeoutTimer) {
+            clearTimeout(sendRecord.timeoutTimer);
+            sendRecord.timeoutTimer = null;
+          }
+          if (readyMsg?.chunkSize) {
+            negotiatedChunkSize = Math.min(proposedChunkSize, readyMsg.chunkSize);
+          }
           this.off(`ready:${transferId}`, onReady);
           resolve();
         };
-        timeoutTimer = setTimeout(() => {
-          this.off(`ready:${transferId}`, onReady);
-          reject(new Error('Receiver handshake timed out. Peer may have disconnected.'));
-        }, 10000);
-        const sendRecord = this.activeSends.get(transferId);
-        if (sendRecord) sendRecord.timeoutTimer = timeoutTimer;
+
         this.on(`ready:${transferId}`, onReady);
+
+        debugLogger.logOutgoing('file:handshake', chosenTransport, this.peerConnection, this.signalingClient, {
+          transferId,
+          streamId,
+          attempt: 1,
+          transport: chosenTransport
+        });
+
+        this.sendControlOnTransport({
+          type: 'file:start',
+          transferId,
+          streamId,
+          fileName: safeName,
+          fileSize: file.size,
+          mimeType: file.type || 'application/octet-stream',
+          chunkSize: proposedChunkSize,
+          totalChunks: Math.ceil(file.size / proposedChunkSize),
+          transport: chosenTransport
+        }, chosenTransport);
+
+        this.emit('transferStarted', {
+          transferId,
+          streamId,
+          fileName: safeName,
+          fileSize: file.size,
+          direction: 'send'
+        });
+
+        // Attempt 1: timeout on initial transport (default 4000ms)
+        const initialTimeout = this.handshakeInitialTimeoutMs || 4000;
+        sendRecord.timeoutTimer = setTimeout(() => {
+          if (isResolved || sendRecord.isCancelled) return;
+
+          // Switch transport
+          const otherTransport = chosenTransport === 'webrtc-dc' ? 'websocket' : 'webrtc-dc';
+          chosenTransport = otherTransport;
+          sendRecord.transport = otherTransport;
+
+          const retryChunkSize = chosenTransport === 'webrtc-dc' ? dcPayloadSize : RELAY_CHUNK_SIZE;
+          negotiatedChunkSize = retryChunkSize;
+
+          debugLogger.logOutgoing('file:handshake_retry', otherTransport, this.peerConnection, this.signalingClient, {
+            transferId,
+            streamId,
+            attempt: 2,
+            transport: otherTransport,
+            chunkSize: retryChunkSize,
+            totalChunks: Math.ceil(file.size / retryChunkSize)
+          });
+
+          try {
+            this.sendControlOnTransport({
+              type: 'file:start',
+              transferId,
+              streamId,
+              fileName: safeName,
+              fileSize: file.size,
+              mimeType: file.type || 'application/octet-stream',
+              chunkSize: retryChunkSize,
+              totalChunks: Math.ceil(file.size / retryChunkSize),
+              transport: chosenTransport
+            }, chosenTransport);
+          } catch {
+            // Handshake retry send failure caught gracefully
+          }
+
+          // Attempt 2: timeout on fallback transport (default 6000ms)
+          const retryTimeout = this.handshakeRetryTimeoutMs || 6000;
+          sendRecord.timeoutTimer = setTimeout(() => {
+            if (isResolved || sendRecord.isCancelled) return;
+            isResolved = true;
+            this.off(`ready:${transferId}`, onReady);
+            reject(new Error('Receiver handshake timed out on both transports. Peer may have disconnected.'));
+          }, retryTimeout);
+        }, initialTimeout);
       });
 
-      // 3. Transmit file chunks on pinned transport with backpressure and incremental SHA-256 hashing
-      let offset = 0;
-      const sendRecord = this.activeSends.get(transferId);
-      const startTime = Date.now();
+      // 2. Transmit file in larger blocks (~256 KiB), split into chunks without per-chunk awaits
+      const targetChunkSize = chosenTransport === 'webrtc-dc' ? negotiatedChunkSize : RELAY_CHUNK_SIZE;
+      const totalEstimatedChunks = Math.ceil(file.size / targetChunkSize);
 
-      while (offset < file.size) {
+      debugLogger.logOutgoing('file:chunks', chosenTransport, this.peerConnection, this.signalingClient, {
+        transferId,
+        streamId,
+        totalChunks: totalEstimatedChunks,
+        chunkSize: targetChunkSize,
+        fileSize: file.size
+      });
+
+      let fileOffset = 0;
+      let chunkIndex = 0;
+      const startTime = Date.now();
+      let lastProgressEmit = 0;
+
+      while (fileOffset < file.size) {
         if (!sendRecord || sendRecord.isCancelled) {
           this.activeSends.delete(transferId);
           return transferId;
         }
 
-        const slice = file.slice(offset, offset + CHUNK_SIZE);
-        const buffer = await slice.arrayBuffer();
+        // Read file in larger blocks (~256 KiB) to minimize disk I/O and async overhead
+        const blockSliceSize = Math.min(READ_BLOCK_SIZE, file.size - fileOffset);
+        const blockSlice = file.slice(fileOffset, fileOffset + blockSliceSize);
+        const blockBuffer = await blockSlice.arrayBuffer();
 
-        // Update cryptographic hash incrementally (O(1) memory)
-        hasher.update(buffer);
+        // Hash the entire 256 KiB block in one go
+        hasher.update(blockBuffer);
 
-        this.sendFileChunkOnTransport(buffer, chosenTransport);
-        offset += buffer.byteLength;
+        // Split block into chunks and send without awaiting per chunk
+        let blockOffset = 0;
+        while (blockOffset < blockBuffer.byteLength) {
+          if (!sendRecord || sendRecord.isCancelled) {
+            this.activeSends.delete(transferId);
+            return transferId;
+          }
 
-        // Calculate speed and progress
-        const elapsedSeconds = Math.max(0.001, (Date.now() - startTime) / 1000);
-        const speed = offset / elapsedSeconds;
-        const percent = Math.min(100, Math.round((offset / file.size) * 100));
+          const currentChunkSize = Math.min(targetChunkSize, blockBuffer.byteLength - blockOffset);
+          const payloadSlice = blockBuffer.slice(blockOffset, blockOffset + currentChunkSize);
 
-        this.emit('progress', {
-          transferId,
-          bytesTransferred: offset,
-          totalBytes: file.size,
-          percent,
-          speed,
-          direction: 'send'
-        });
+          // Construct framed chunk with 8-byte header: uint32 streamId + uint32 chunkIndex (big-endian)
+          const framed = new Uint8Array(8 + payloadSlice.byteLength);
+          const view = new DataView(framed.buffer, framed.byteOffset, 8);
+          view.setUint32(0, streamId, false);
+          view.setUint32(4, chunkIndex, false);
+          framed.set(new Uint8Array(payloadSlice), 8);
 
-        // Backpressure flow control on pinned transport
-        await this.waitForBufferedAmountLowOnTransport(chosenTransport);
+          this.sendFileChunkOnTransport(framed.buffer, chosenTransport);
+
+          blockOffset += currentChunkSize;
+          fileOffset += currentChunkSize;
+          chunkIndex++;
+
+          // Throttle progress UI emission to every ~100 ms
+          const now = Date.now();
+          if (now - lastProgressEmit >= PROGRESS_EMIT_INTERVAL_MS || fileOffset >= file.size) {
+            lastProgressEmit = now;
+            const elapsedSeconds = Math.max(0.001, (now - startTime) / 1000);
+            const speed = fileOffset / elapsedSeconds;
+            const percent = Math.min(100, Math.round((fileOffset / file.size) * 100));
+
+            this.emit('progress', {
+              transferId,
+              streamId,
+              bytesTransferred: fileOffset,
+              totalBytes: file.size,
+              percent,
+              speed,
+              direction: 'send'
+            });
+          }
+
+          // Backpressure: only pause when bufferedAmount reaches high water mark (4 MiB)
+          if (this.shouldPauseForBackpressure(chosenTransport)) {
+            await this.waitForBufferedAmountLowOnTransport(chosenTransport);
+          }
+        }
       }
 
-      // 4. Drain all buffered file chunks before sending completion manifest
+      // 3. Drain all buffered file chunks before sending completion manifest
       await this.waitForFileDrainedOnTransport(chosenTransport);
 
-      // 5. Compute final verified SHA-256 hash
+      // 4. Compute final verified SHA-256 hash
       const fileHash = hasher.digest();
 
-      // 6. Send completion manifest with cryptographic hash on pinned transport
+      // 5. Send completion manifest with cryptographic hash on pinned transport
       this.sendControlOnTransport({
         type: 'file:complete',
         transferId,
+        streamId,
         fileHash,
         totalBytes: file.size,
-        totalChunks
+        totalChunks: chunkIndex
       }, chosenTransport);
 
       this.activeSends.delete(transferId);
@@ -495,6 +662,7 @@ export class FileTransferManager {
       const senderUrl = typeof window !== 'undefined' && window.URL ? URL.createObjectURL(file) : null;
       this.emit('transferCompleted', {
         transferId,
+        streamId,
         fileName: safeName,
         fileSize: file.size,
         mimeType: file.type || null,
@@ -507,136 +675,321 @@ export class FileTransferManager {
       return transferId;
     } catch (err) {
       this.activeSends.delete(transferId);
+      // ALWAYS clean up: send file:cancel on BOTH transports
+      this.sendCancelOnBothTransports({
+        type: 'file:cancel',
+        transferId,
+        streamId,
+        reason: err.message || 'SEND_FAILED'
+      });
+
       this.emit('transferError', {
         transferId,
+        streamId,
         fileName: safeName,
         code: 'SEND_FAILED',
         message: err.message || 'File transmission failed'
       });
       throw err;
+    } finally {
+      this.isSending = false;
     }
   }
 
   /**
+   * Reset 20-second inactivity timer for a receive stream.
+   * Discards partial data and emits neutral 'Transfer interrupted' error if inactive for 20s.
+   * @param {object} receiveRecord
+   */
+  resetInactivityTimer(receiveRecord) {
+    if (!receiveRecord) return;
+    if (receiveRecord.inactivityTimer) {
+      clearTimeout(receiveRecord.inactivityTimer);
+    }
+    const timeout = this.inactivityTimeoutMs || 20000;
+    receiveRecord.inactivityTimer = setTimeout(() => {
+      const transferId = receiveRecord.transferId;
+      const fileName = receiveRecord.fileName;
+      const streamId = receiveRecord.streamId;
+      this.cleanupStream(streamId);
+
+      this.emit('transferError', {
+        transferId,
+        streamId,
+        fileName,
+        code: 'TRANSFER_INTERRUPTED',
+        error: 'Transfer interrupted',
+        message: 'Transfer interrupted',
+        direction: 'receive'
+      });
+    }, timeout);
+  }
+
+  /**
    * Handle incoming file metadata from remote peer.
+   * Supports multiple active streams in Map keyed by streamId.
+   * Repeated file:start for the same stream/transfer is handled idempotently.
    * @param {any} msg
    * @param {'webrtc-dc' | 'websocket'} [arrivalTransport]
    */
   handleReceiveStart(msg, arrivalTransport = null) {
-    const { transferId, fileName, fileSize, mimeType, totalChunks } = msg;
+    const { transferId, streamId, fileName, fileSize, mimeType, totalChunks } = msg;
     const sizeNumber = Number(fileSize);
     const chosenTransport = arrivalTransport || (this.peerConnection?.controlChannel?.readyState === 'open' ? 'webrtc-dc' : 'websocket');
+
+    // 1. Idempotent retry check: if already known, re-send file:ready without creating a second receive
+    const existingStreamId = streamId || this.transferToStreamId.get(transferId);
+    const existingRecord = existingStreamId ? this.activeReceives.get(existingStreamId) : null;
+    if (existingRecord) {
+      existingRecord.transport = chosenTransport;
+      if (chosenTransport === 'websocket') {
+        existingRecord.chunkSize = RELAY_CHUNK_SIZE;
+      }
+      this.resetInactivityTimer(existingRecord);
+      debugLogger.logIncoming('file:start_retry', chosenTransport, this.peerConnection, this.signalingClient, {
+        transferId: existingRecord.transferId,
+        streamId: existingRecord.streamId,
+        arrivalTransport: chosenTransport,
+        chunkSize: existingRecord.chunkSize || RELAY_CHUNK_SIZE
+      });
+      this.sendControlOnTransport({
+        type: 'file:ready',
+        transferId: existingRecord.transferId,
+        streamId: existingRecord.streamId,
+        chunkSize: existingRecord.chunkSize || RELAY_CHUNK_SIZE
+      }, chosenTransport);
+      return;
+    }
 
     // Safeguard: Check memory limit for mobile/in-memory browsers
     if (sizeNumber > MEMORY_TRANSFER_LIMIT && !isFileSystemAccessSupported) {
       this.cancelTransfer(transferId, 'MEMORY_LIMIT_EXCEEDED');
       this.emit('transferError', {
         transferId,
+        streamId,
         code: 'MEMORY_LIMIT_EXCEEDED',
         message: `File size exceeds 200 MB limit for this browser without direct disk streaming support.`
       });
       return;
     }
 
-    this.currentReceive = {
+    const receiverSctpMax = this.peerConnection?.getMaxMessageSize
+      ? this.peerConnection.getMaxMessageSize()
+      : (this.peerConnection?.pc?.sctp?.maxMessageSize || 16384);
+    let agreedChunkSize = msg.chunkSize || RELAY_CHUNK_SIZE;
+    if (chosenTransport === 'webrtc-dc') {
+      const maxAllowedPayload = Math.max(1024, Math.min(receiverSctpMax, 65536) - 8);
+      agreedChunkSize = Math.min(agreedChunkSize, maxAllowedPayload);
+    } else {
+      agreedChunkSize = RELAY_CHUNK_SIZE;
+    }
+
+    const receiveRecord = {
       transferId,
+      streamId: streamId || 1,
       fileName: sanitizeFileName(fileName),
       fileSize: sizeNumber,
       mimeType: mimeType || 'application/octet-stream',
       totalChunks: Number(totalChunks),
+      chunkSize: agreedChunkSize,
       receivedBytes: 0,
+      receivedChunkIndices: new Set(),
       chunks: [],
       blobParts: [],
       hasher: createSha256Incremental(),
       startTime: Date.now(),
+      lastProgressEmit: 0,
       isCancelled: false,
-      transport: chosenTransport
+      isFinished: false,
+      transport: chosenTransport,
+      inactivityTimer: null,
+      completionTimeout: null
     };
+
+    this.activeReceives.set(receiveRecord.streamId, receiveRecord);
+    this.transferToStreamId.set(transferId, receiveRecord.streamId);
+
+    // Auto-cancel receive if no chunks arrive within 20s
+    this.resetInactivityTimer(receiveRecord);
+
+    debugLogger.logIncoming('file:start', chosenTransport, this.peerConnection, this.signalingClient, {
+      transferId,
+      streamId: receiveRecord.streamId,
+      totalChunks: receiveRecord.totalChunks,
+      chunkIndexRange: `0..${Math.max(0, receiveRecord.totalChunks - 1)}`,
+      fileSize: sizeNumber,
+      agreedChunkSize
+    });
 
     this.emit('transferStarted', {
       transferId,
-      fileName: this.currentReceive.fileName,
-      fileSize: this.currentReceive.fileSize,
+      streamId: receiveRecord.streamId,
+      fileName: receiveRecord.fileName,
+      fileSize: receiveRecord.fileSize,
       direction: 'receive'
     });
 
     // Send receiver-ready handshake back to sender on the same transport it arrived on
     this.sendControlOnTransport({
       type: 'file:ready',
-      transferId
+      transferId,
+      streamId: receiveRecord.streamId,
+      chunkSize: agreedChunkSize
     }, chosenTransport);
   }
 
   /**
-   * Handle incoming binary chunk on file channel.
-   * @param {ArrayBuffer} chunk
+   * Handle incoming binary chunk on file channel or websocket relay.
+   * Demultiplexes by 8-byte header: uint32 streamId + uint32 chunkIndex.
+   * Discards stale chunks for unknown/finished streams, drops duplicates, and checks early byte overflow.
+   * @param {ArrayBuffer | ArrayBufferView} chunk
+   * @param {'webrtc-dc' | 'websocket'} [arrivalTransport]
    */
-  handleIncomingChunk(chunk) {
-    if (!this.currentReceive || this.currentReceive.isCancelled) return;
+  handleIncomingChunk(chunk, arrivalTransport = null) {
+    if (!chunk) return;
 
-    // Incremental SHA-256 hash update
-    this.currentReceive.hasher.update(chunk);
+    let arrayBuffer;
+    let byteOffset = 0;
+    let byteLength = 0;
 
-    this.currentReceive.chunks.push(chunk);
-    this.currentReceive.receivedBytes += chunk.byteLength;
-
-    // Memory batching: every 32 chunks (~512 KiB), roll into a native Blob part to save JS heap
-    if (this.currentReceive.chunks.length >= 32) {
-      this.currentReceive.blobParts.push(new Blob(this.currentReceive.chunks));
-      this.currentReceive.chunks = [];
+    if (chunk instanceof ArrayBuffer) {
+      arrayBuffer = chunk;
+      byteOffset = 0;
+      byteLength = chunk.byteLength;
+    } else if (ArrayBuffer.isView(chunk)) {
+      arrayBuffer = chunk.buffer;
+      byteOffset = chunk.byteOffset;
+      byteLength = chunk.byteLength;
+    } else {
+      return;
     }
 
-    const elapsedSeconds = Math.max(0.001, (Date.now() - this.currentReceive.startTime) / 1000);
-    const speed = this.currentReceive.receivedBytes / elapsedSeconds;
-    // Cap progress display at 99% until cryptographic verification is completed
-    const rawPercent = Math.round((this.currentReceive.receivedBytes / this.currentReceive.fileSize) * 100);
-    const percent = Math.min(99, rawPercent);
+    // Minimum 8 bytes for streamId + chunkIndex header
+    if (byteLength < 8) return;
 
-    this.emit('progress', {
-      transferId: this.currentReceive.transferId,
-      bytesTransferred: this.currentReceive.receivedBytes,
-      totalBytes: this.currentReceive.fileSize,
-      percent,
-      speed,
-      direction: 'receive'
-    });
+    const view = new DataView(arrayBuffer, byteOffset, byteLength);
+    const streamId = view.getUint32(0, false);
+    const chunkIndex = view.getUint32(4, false);
+
+    const receiveRecord = this.activeReceives.get(streamId);
+    // Ignore chunks for unknown/finished/cancelled streams
+    if (!receiveRecord || receiveRecord.isCancelled || receiveRecord.isFinished) {
+      return;
+    }
+
+    // Discard duplicate chunkIndex
+    if (receiveRecord.receivedChunkIndices.has(chunkIndex)) {
+      return;
+    }
+    receiveRecord.receivedChunkIndices.add(chunkIndex);
+
+    // Reset 20-second inactivity timer on valid chunk
+    this.resetInactivityTimer(receiveRecord);
+
+    // Extract raw payload (slice after 8-byte header)
+    const payload = arrayBuffer.slice(byteOffset + 8, byteOffset + byteLength);
+
+    // Incremental SHA-256 hash update on raw file payload
+    receiveRecord.hasher.update(payload);
+
+    receiveRecord.chunks.push(payload);
+    receiveRecord.receivedBytes += payload.byteLength;
+
+    // EARLY ERROR: if receivedBytes exceeds fileSize, stop immediately with a clear error
+    if (receiveRecord.receivedBytes > receiveRecord.fileSize) {
+      const errorMsg = `Received bytes (${receiveRecord.receivedBytes}) exceeded declared file size (${receiveRecord.fileSize})`;
+      const tid = receiveRecord.transferId;
+      const fname = receiveRecord.fileName;
+      this.cleanupStream(streamId);
+
+      this.sendCancelOnBothTransports({
+        type: 'file:cancel',
+        transferId: tid,
+        streamId,
+        reason: 'BYTE_COUNT_EXCEEDED'
+      });
+
+      this.emit('transferError', {
+        transferId: tid,
+        streamId,
+        fileName: fname,
+        code: 'BYTE_COUNT_EXCEEDED',
+        error: errorMsg,
+        message: errorMsg,
+        direction: 'receive'
+      });
+      return;
+    }
+
+    // Memory batching: every 32 chunks (~512 KiB - 2 MiB), roll into a native Blob part to save JS heap
+    if (receiveRecord.chunks.length >= 32) {
+      receiveRecord.blobParts.push(new Blob(receiveRecord.chunks));
+      receiveRecord.chunks = [];
+    }
+
+    // Throttle progress UI emission to every ~100 ms
+    const now = Date.now();
+    if (
+      now - (receiveRecord.lastProgressEmit || 0) >= PROGRESS_EMIT_INTERVAL_MS ||
+      receiveRecord.receivedBytes >= receiveRecord.fileSize
+    ) {
+      receiveRecord.lastProgressEmit = now;
+      const elapsedSeconds = Math.max(0.001, (now - receiveRecord.startTime) / 1000);
+      const speed = receiveRecord.receivedBytes / elapsedSeconds;
+      // Cap progress display at 99% until cryptographic verification is completed
+      const rawPercent = Math.round((receiveRecord.receivedBytes / receiveRecord.fileSize) * 100);
+      const percent = Math.min(99, rawPercent);
+
+      this.emit('progress', {
+        transferId: receiveRecord.transferId,
+        streamId: receiveRecord.streamId,
+        bytesTransferred: receiveRecord.receivedBytes,
+        totalBytes: receiveRecord.fileSize,
+        percent,
+        speed,
+        direction: 'receive'
+      });
+    }
 
     // If file:complete has already arrived and we just received the final chunk:
     if (
-      this.currentReceive.pendingCompletion &&
-      this.currentReceive.receivedBytes >= this.currentReceive.fileSize
+      receiveRecord.pendingCompletion &&
+      receiveRecord.receivedBytes >= receiveRecord.fileSize
     ) {
-      if (this.currentReceive.completionTimeout) {
-        clearTimeout(this.currentReceive.completionTimeout);
-        this.currentReceive.completionTimeout = null;
+      if (receiveRecord.completionTimeout) {
+        clearTimeout(receiveRecord.completionTimeout);
+        receiveRecord.completionTimeout = null;
       }
-      this.doFinalizeReceive();
+      this.doFinalizeReceive(receiveRecord);
     }
   }
 
   /**
    * Finalize and cryptographically verify the received file.
-   * If completion signal arrives while final chunks are still in transit on the file channel,
+   * If completion signal arrives while final chunks are still in transit,
    * waits gracefully for the remaining bytes rather than failing prematurely.
    * @param {string} transferId
    * @param {string} expectedFileHash
+   * @param {number} [streamId]
    */
-  finalizeReceive(transferId, expectedFileHash) {
-    if (!this.currentReceive || this.currentReceive.transferId !== transferId) return;
+  finalizeReceive(transferId, expectedFileHash, streamId = null) {
+    const resolvedStreamId = streamId || this.transferToStreamId.get(transferId);
+    const receiveRecord = resolvedStreamId ? this.activeReceives.get(resolvedStreamId) : null;
+    if (!receiveRecord) return;
 
-    this.currentReceive.pendingCompletion = { expectedFileHash };
+    receiveRecord.pendingCompletion = { expectedFileHash };
 
     // If all bytes have already arrived, finish immediately
-    if (this.currentReceive.receivedBytes >= this.currentReceive.fileSize) {
-      this.doFinalizeReceive();
+    if (receiveRecord.receivedBytes >= receiveRecord.fileSize) {
+      this.doFinalizeReceive(receiveRecord);
     } else {
       // If some chunk is still in flight on fileChannel, wait for it with a 5s timeout
-      if (this.currentReceive.completionTimeout) {
-        clearTimeout(this.currentReceive.completionTimeout);
+      if (receiveRecord.completionTimeout) {
+        clearTimeout(receiveRecord.completionTimeout);
       }
-      this.currentReceive.completionTimeout = setTimeout(() => {
-        if (this.currentReceive && this.currentReceive.pendingCompletion) {
-          this.doFinalizeReceive();
+      receiveRecord.completionTimeout = setTimeout(() => {
+        if (receiveRecord && receiveRecord.pendingCompletion) {
+          this.doFinalizeReceive(receiveRecord);
         }
       }, 5000);
     }
@@ -644,23 +997,47 @@ export class FileTransferManager {
 
   /**
    * Complete the assembly, byte verification, and SHA-256 check.
+   * @param {object} receiveRecord
    */
-  doFinalizeReceive() {
-    if (!this.currentReceive) return;
+  doFinalizeReceive(receiveRecord) {
+    if (!receiveRecord || receiveRecord.isFinished || receiveRecord.isCancelled) return;
 
-    const { fileName, fileSize, mimeType, chunks, blobParts, hasher, receivedBytes, pendingCompletion } =
-      this.currentReceive;
+    const {
+      streamId,
+      transferId,
+      fileName,
+      fileSize,
+      mimeType,
+      chunks,
+      blobParts,
+      hasher,
+      receivedBytes,
+      pendingCompletion
+    } = receiveRecord;
+
+    receiveRecord.isFinished = true;
+
+    // Clear timers
+    if (receiveRecord.inactivityTimer) {
+      clearTimeout(receiveRecord.inactivityTimer);
+      receiveRecord.inactivityTimer = null;
+    }
+    if (receiveRecord.completionTimeout) {
+      clearTimeout(receiveRecord.completionTimeout);
+      receiveRecord.completionTimeout = null;
+    }
+
     const expectedFileHash = pendingCompletion?.expectedFileHash;
-    const transferId = this.currentReceive.transferId;
 
     // 1. Verify exact byte count
     if (receivedBytes !== fileSize) {
       this.emit('transferError', {
         transferId,
+        streamId,
         code: 'BYTE_COUNT_MISMATCH',
         message: `Received ${receivedBytes} bytes, expected ${fileSize} bytes.`
       });
-      this.cleanupReceive();
+      this.cleanupStream(streamId);
       return;
     }
 
@@ -669,10 +1046,11 @@ export class FileTransferManager {
     if (expectedFileHash && actualHash !== expectedFileHash) {
       this.emit('transferError', {
         transferId,
+        streamId,
         code: 'INTEGRITY_MISMATCH',
         message: `Cryptographic SHA-256 verification failed (expected: ${expectedFileHash.slice(0, 8)}..., actual: ${actualHash.slice(0, 8)}...).`
       });
-      this.cleanupReceive();
+      this.cleanupStream(streamId);
       return;
     }
 
@@ -681,11 +1059,15 @@ export class FileTransferManager {
       blobParts.push(new Blob(chunks));
     }
     const finalBlob = new Blob(blobParts, { type: mimeType });
-    const downloadUrl = URL.createObjectURL(finalBlob);
+    const downloadUrl = typeof URL !== 'undefined' && URL.createObjectURL ? URL.createObjectURL(finalBlob) : null;
 
-    // 4. Emit verified completion (now reaches 100%)
+    // 4. Clean up stream from active receives
+    this.cleanupStream(streamId);
+
+    // 5. Emit verified completion (now reaches 100%)
     this.emit('transferCompleted', {
       transferId,
+      streamId,
       fileName,
       fileSize,
       mimeType,
@@ -695,19 +1077,40 @@ export class FileTransferManager {
       blob: finalBlob,
       direction: 'receive'
     });
-
-    this.cleanupReceive();
   }
 
-  cleanupReceive() {
-    if (this.currentReceive) {
-      if (this.currentReceive.completionTimeout) {
-        clearTimeout(this.currentReceive.completionTimeout);
+  /**
+   * Remove stream, clear its timers, and discard all partial buffers.
+   * @param {number} streamId
+   */
+  cleanupStream(streamId) {
+    const record = this.activeReceives.get(streamId);
+    if (record) {
+      if (record.inactivityTimer) {
+        clearTimeout(record.inactivityTimer);
+        record.inactivityTimer = null;
       }
-      this.currentReceive.chunks = [];
-      this.currentReceive.blobParts = [];
-      this.currentReceive = null;
+      if (record.completionTimeout) {
+        clearTimeout(record.completionTimeout);
+        record.completionTimeout = null;
+      }
+      record.chunks = [];
+      record.blobParts = [];
+      record.isCancelled = true;
+      this.transferToStreamId.delete(record.transferId);
+      this.activeReceives.delete(streamId);
     }
+  }
+
+  /**
+   * Clear all active receive streams and discard all partial buffers.
+   */
+  cleanupReceive() {
+    for (const streamId of Array.from(this.activeReceives.keys())) {
+      this.cleanupStream(streamId);
+    }
+    this.activeReceives.clear();
+    this.transferToStreamId.clear();
   }
 
   /**
@@ -716,37 +1119,39 @@ export class FileTransferManager {
    * @param {string} [reason='user-cancelled']
    */
   cancelTransfer(transferId, reason = 'user-cancelled') {
-    let targetTransport = null;
+    let targetStreamId = null;
 
     // If sending
     if (this.activeSends.has(transferId)) {
       const sendRecord = this.activeSends.get(transferId);
       if (sendRecord) {
         sendRecord.isCancelled = true;
-        targetTransport = sendRecord.transport;
-        if (sendRecord.timeoutTimer) clearTimeout(sendRecord.timeoutTimer);
+        targetStreamId = sendRecord.streamId;
+        if (sendRecord.timeoutTimer) {
+          clearTimeout(sendRecord.timeoutTimer);
+          sendRecord.timeoutTimer = null;
+        }
       }
       this.activeSends.delete(transferId);
+      this.emit(`ready:${transferId}`);
     }
 
     // If receiving
-    if (this.currentReceive && this.currentReceive.transferId === transferId) {
-      this.currentReceive.isCancelled = true;
-      targetTransport = targetTransport || this.currentReceive.transport;
-      this.cleanupReceive();
+    const resolvedStreamId = this.transferToStreamId.get(transferId);
+    if (resolvedStreamId && this.activeReceives.has(resolvedStreamId)) {
+      targetStreamId = targetStreamId || resolvedStreamId;
+      this.cleanupStream(resolvedStreamId);
     }
 
-    try {
-      this.sendControlOnTransport({
-        type: 'file:cancel',
-        transferId,
-        reason
-      }, targetTransport);
-    } catch {
-      // ignore
-    }
+    // Always send file:cancel on BOTH transports (ignore errors)
+    this.sendCancelOnBothTransports({
+      type: 'file:cancel',
+      transferId,
+      streamId: targetStreamId,
+      reason
+    });
 
-    this.emit('transferCancelled', { transferId, reason });
+    this.emit('transferCancelled', { transferId, streamId: targetStreamId, reason });
   }
 
   /**
@@ -754,20 +1159,31 @@ export class FileTransferManager {
    * @param {any} msg
    */
   handleRemoteCancel(msg) {
-    const { transferId, reason } = msg;
+    const { transferId, streamId, reason } = msg;
 
     if (this.activeSends.has(transferId)) {
       const sendRecord = this.activeSends.get(transferId);
-      if (sendRecord) sendRecord.isCancelled = true;
+      if (sendRecord) {
+        sendRecord.isCancelled = true;
+        if (sendRecord.timeoutTimer) {
+          clearTimeout(sendRecord.timeoutTimer);
+          sendRecord.timeoutTimer = null;
+        }
+      }
       this.activeSends.delete(transferId);
+      this.emit(`ready:${transferId}`);
     }
 
-    if (this.currentReceive && this.currentReceive.transferId === transferId) {
-      const fileName = this.currentReceive.fileName;
-      this.cleanupReceive();
+    const resolvedStreamId = streamId || this.transferToStreamId.get(transferId);
+    if (resolvedStreamId && this.activeReceives.has(resolvedStreamId)) {
+      const receiveRecord = this.activeReceives.get(resolvedStreamId);
+      const fileName = receiveRecord.fileName;
+      this.cleanupStream(resolvedStreamId);
+
       if (reason === 'peer-disconnected' || reason === 'TRANSFER_INTERRUPTED') {
         this.emit('transferError', {
           transferId,
+          streamId: resolvedStreamId,
           fileName,
           code: 'TRANSFER_INTERRUPTED',
           error: 'Transfer interrupted',
@@ -778,6 +1194,6 @@ export class FileTransferManager {
       }
     }
 
-    this.emit('transferCancelled', { transferId, reason: reason || 'remote-cancelled' });
+    this.emit('transferCancelled', { transferId, streamId: resolvedStreamId, reason: reason || 'remote-cancelled' });
   }
 }

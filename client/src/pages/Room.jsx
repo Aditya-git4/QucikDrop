@@ -22,8 +22,10 @@ export function Room({
   expiresAt,
   messages,
   onSendMessage,
+  onLeaveRoom,
   onCloseRoom,
   onReset,
+  onStartFreshSession,
   errorMessage,
   isP2PConnected = false,
   webrtcStatus = 'disconnected',
@@ -140,11 +142,10 @@ export function Room({
 
   const getHeaderBadgeText = () => {
     if (isP2PConnected) {
-      if (connectionType === 'relay') return '🔄 Relayed (TURN)';
       if (connectionType === 'lan') return '⚡ P2P Direct (LAN)';
-      return '⚡ P2P Direct (STUN)';
+      return '⚡ P2P Direct';
     }
-    if (isConnected) return '● Signaling Connected';
+    if (isConnected) return '● Relay (server)';
     if (roomStatus === 'waiting') return '○ Waiting for Peer';
     return 'Closed';
   };
@@ -276,14 +277,25 @@ export function Room({
           {!isTerminated ? (
             showCloseConfirm ? (
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--color-danger)', fontWeight: 600 }}>End room?</span>
+                <span style={{ fontSize: '0.85rem', color: 'var(--color-danger)', fontWeight: 600 }}>
+                  {isOwner ? 'Close room?' : 'Leave room?'}
+                </span>
                 <button
                   type="button"
-                  onClick={onCloseRoom}
+                  onClick={() => {
+                    setShowCloseConfirm(false);
+                    if (onLeaveRoom) {
+                      onLeaveRoom();
+                    } else if (onCloseRoom) {
+                      onCloseRoom();
+                    } else {
+                      onReset();
+                    }
+                  }}
                   className="btn btn-danger"
                   style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.82rem' }}
                 >
-                  Yes, Close
+                  {isOwner ? 'Confirm Close' : 'Confirm Leave'}
                 </button>
                 <button
                   type="button"
@@ -295,24 +307,46 @@ export function Room({
                 </button>
               </div>
             ) : (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCloseConfirm(true)}
+                  className="btn btn-secondary"
+                  style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
+                  aria-label={isOwner ? 'Close Room' : 'Leave Room'}
+                >
+                  {isOwner ? 'Close Room' : 'Leave Room'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onStartFreshSession}
+                  className="btn btn-primary"
+                  style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
+                  aria-label="New Room"
+                >
+                  New Room
+                </button>
+              </div>
+            )
+          ) : (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button
                 type="button"
-                onClick={() => setShowCloseConfirm(true)}
+                onClick={onReset}
                 className="btn btn-secondary"
                 style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
               >
-                {isOwner ? 'Close Room' : 'Leave Room'}
+                Home
               </button>
-            )
-          ) : (
-            <button
-              type="button"
-              onClick={onReset}
-              className="btn btn-primary"
-              style={{ minHeight: '36px', padding: '8px 18px', fontSize: '0.85rem' }}
-            >
-              Start New Room
-            </button>
+              <button
+                type="button"
+                onClick={onStartFreshSession}
+                className="btn btn-primary"
+                style={{ minHeight: '36px', padding: '8px 18px', fontSize: '0.85rem' }}
+              >
+                Start New Room
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -389,10 +423,10 @@ export function Room({
           }}
         >
           <div style={{ fontSize: '2.5rem', marginBottom: '10px' }}>
-            {roomStatus === 'expired' ? '⏳' : '👋'}
+            {roomStatus === 'expired' ? '⏳' : roomStatus === 'error' ? '⚠️' : '👋'}
           </div>
           <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
-            {roomStatus === 'expired' ? 'Room Expired' : 'Room Ended'}
+            {roomStatus === 'expired' ? 'Room Expired' : roomStatus === 'error' ? 'Connection Error' : 'Room Ended'}
           </h2>
           <p style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem', maxWidth: '440px', margin: '0 auto 24px', lineHeight: 1.55 }}>
             {errorMessage ||
@@ -400,14 +434,66 @@ export function Room({
                 ? 'This temporary room exceeded its lifetime limit and has expired.'
                 : 'The connection has closed. For your security, temporary room data has been discarded.')}
           </p>
-          <button
-            type="button"
-            onClick={onReset}
-            className="btn btn-primary"
-            style={{ padding: '12px 28px' }}
-          >
-            ⚡ Create a New Room
-          </button>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={onStartFreshSession || onReset}
+              className="btn btn-primary"
+              style={{ padding: '12px 28px' }}
+            >
+              ⚡ {roomStatus === 'error' ? 'Retry Connection' : 'Create a New Room'}
+            </button>
+            {roomStatus === 'error' && (
+              <button
+                type="button"
+                onClick={onReset}
+                className="btn btn-secondary"
+                style={{ padding: '12px 20px' }}
+              >
+                Return to Home
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Connecting State Banner */}
+      {roomStatus === 'connecting' && (
+        <div
+          className="card animate-entrance"
+          style={{
+            textAlign: 'center',
+            padding: '36px 20px',
+            border: '1px solid var(--glass-border)'
+          }}
+        >
+          <div style={{ fontSize: '2.5rem', marginBottom: '12px', animation: 'spin 2s linear infinite', display: 'inline-block' }}>
+            ⚡
+          </div>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
+            Establishing Secure Room
+          </h2>
+          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.90rem', maxWidth: '380px', margin: '0 auto 20px' }}>
+            Connecting to signaling network and generating one-time room credentials...
+          </p>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={onStartFreshSession || onReset}
+              className="btn btn-secondary"
+              style={{ minHeight: '34px', padding: '6px 18px', fontSize: '0.82rem' }}
+            >
+              🔄 Retry
+            </button>
+            <button
+              type="button"
+              onClick={onReset}
+              className="btn btn-secondary"
+              style={{ minHeight: '34px', padding: '6px 18px', fontSize: '0.82rem' }}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 

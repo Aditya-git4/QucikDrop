@@ -1,11 +1,11 @@
 /**
- * Incremental SHA-256 implementation in pure JavaScript.
- * Allows constant-memory O(1) chunk-by-chunk cryptographic hashing for large files
- * without requiring the entire file to be loaded into memory.
+ * High-performance incremental SHA-256 implementation in pure JavaScript.
+ * Optimized for high-throughput streaming (O(1) memory, zero per-block allocations).
+ * Allows chunk-by-chunk cryptographic hashing for large files without GC pressure.
  */
 
 // Initial hash values (first 32 bits of the fractional parts of the square roots of the first 8 primes 2..19)
-const INITIAL_H = new Uint3232([
+const INITIAL_H = new Uint32Array([
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 ]);
@@ -22,10 +22,6 @@ const K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]);
 
-function Uint3232(arr) {
-  return new Uint32Array(arr);
-}
-
 function rotr(n, x) {
   return (x >>> n) | (x << (32 - n));
 }
@@ -41,39 +37,11 @@ export class Sha256Incremental {
   }
 
   /**
-   * Feed a chunk of data (ArrayBuffer or Uint8Array) into the hasher.
-   * @param {ArrayBuffer | Uint8Array} data
+   * Process a single 64-byte block using the pre-allocated schedule array this.w.
+   * Zero heap allocations.
    */
-  update(data) {
-    if (this.finalized) {
-      throw new Error('Cannot update SHA-256 after digest() has been called');
-    }
-
-    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-    let offset = 0;
-    const len = bytes.length;
-    this.totalBytes += len;
-
-    while (offset < len) {
-      const toCopy = Math.min(64 - this.blockLen, len - offset);
-      this.block.set(bytes.subarray(offset, offset + toCopy), this.blockLen);
-      this.blockLen += toCopy;
-      offset += toCopy;
-
-      if (this.blockLen === 64) {
-        this.processBlock(this.block);
-        this.blockLen = 0;
-      }
-    }
-  }
-
-  processBlock(block) {
+  processWords() {
     const w = this.w;
-    const view = new DataView(block.buffer, block.byteOffset, 64);
-
-    for (let i = 0; i < 16; i++) {
-      w[i] = view.getUint32(i * 4, false);
-    }
 
     for (let i = 16; i < 64; i++) {
       const s0 = rotr(7, w[i - 15]) ^ rotr(18, w[i - 15]) ^ (w[i - 15] >>> 3);
@@ -119,29 +87,106 @@ export class Sha256Incremental {
   }
 
   /**
+   * Feed a chunk of data (ArrayBuffer or Uint8Array) into the hasher.
+   * Reads blocks in-place directly from the source buffer, eliminating subarray allocations.
+   * @param {ArrayBuffer | Uint8Array} data
+   */
+  update(data) {
+    if (this.finalized) {
+      throw new Error('Cannot update SHA-256 after digest() has been called');
+    }
+
+    const bytes = data instanceof Uint8Array
+      ? data
+      : (ArrayBuffer.isView(data)
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(data));
+
+    let offset = 0;
+    const len = bytes.length;
+    this.totalBytes += len;
+
+    // 1. Fill partial leftover block if any
+    if (this.blockLen > 0) {
+      const toCopy = Math.min(64 - this.blockLen, len);
+      for (let i = 0; i < toCopy; i++) {
+        this.block[this.blockLen + i] = bytes[i];
+      }
+      this.blockLen += toCopy;
+      offset += toCopy;
+
+      if (this.blockLen === 64) {
+        for (let i = 0; i < 16; i++) {
+          const j = i * 4;
+          this.w[i] = ((this.block[j] << 24) | (this.block[j + 1] << 16) | (this.block[j + 2] << 8) | this.block[j + 3]) >>> 0;
+        }
+        this.processWords();
+        this.blockLen = 0;
+      }
+    }
+
+    // 2. Fast-path: process full 64-byte blocks directly from source bytes without copying
+    const w = this.w;
+    while (offset + 64 <= len) {
+      for (let i = 0; i < 16; i++) {
+        const j = offset + (i * 4);
+        w[i] = ((bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3]) >>> 0;
+      }
+      this.processWords();
+      offset += 64;
+    }
+
+    // 3. Store remaining tail bytes (< 64 bytes) into this.block
+    if (offset < len) {
+      const remaining = len - offset;
+      for (let i = 0; i < remaining; i++) {
+        this.block[this.blockLen + i] = bytes[offset + i];
+      }
+      this.blockLen += remaining;
+    }
+  }
+
+  /**
    * Finalize the hash and return the 64-character lowercase hexadecimal string.
    * @returns {string}
    */
   digest() {
     if (!this.finalized) {
-      // Padding
-      const totalBits = this.totalBytes * 8;
-      // Append 0x80 bit
+      // Padding: append 0x80 byte
       this.block[this.blockLen++] = 0x80;
 
       if (this.blockLen > 56) {
-        this.block.fill(0, this.blockLen);
-        this.processBlock(this.block);
+        this.block.fill(0, this.blockLen, 64);
+        for (let i = 0; i < 16; i++) {
+          const j = i * 4;
+          this.w[i] = ((this.block[j] << 24) | (this.block[j + 1] << 16) | (this.block[j + 2] << 8) | this.block[j + 3]) >>> 0;
+        }
+        this.processWords();
         this.blockLen = 0;
       }
 
       this.block.fill(0, this.blockLen, 56);
-      const view = new DataView(this.block.buffer, this.block.byteOffset, 64);
-      // High 32 bits of total bits (supports files up to multiple gigabytes)
-      view.setUint32(56, Math.floor(totalBits / 0x100000000), false);
-      // Low 32 bits
-      view.setUint32(60, totalBits >>> 0, false);
-      this.processBlock(this.block);
+      const totalBits = this.totalBytes * 8;
+
+      // High 32 bits and low 32 bits of total bits count
+      const highBits = Math.floor(totalBits / 0x100000000);
+      const lowBits = totalBits >>> 0;
+
+      this.block[56] = (highBits >>> 24) & 0xff;
+      this.block[57] = (highBits >>> 16) & 0xff;
+      this.block[58] = (highBits >>> 8) & 0xff;
+      this.block[59] = highBits & 0xff;
+
+      this.block[60] = (lowBits >>> 24) & 0xff;
+      this.block[61] = (lowBits >>> 16) & 0xff;
+      this.block[62] = (lowBits >>> 8) & 0xff;
+      this.block[63] = lowBits & 0xff;
+
+      for (let i = 0; i < 16; i++) {
+        const j = i * 4;
+        this.w[i] = ((this.block[j] << 24) | (this.block[j + 1] << 16) | (this.block[j + 2] << 8) | this.block[j + 3]) >>> 0;
+      }
+      this.processWords();
       this.finalized = true;
     }
 

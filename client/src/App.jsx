@@ -72,6 +72,7 @@ export function App() {
     rejoinRoom,
     closeRoom,
     reset,
+    startFreshSession,
     setMyDeviceName
   } = useSignaling();
 
@@ -82,7 +83,8 @@ export function App() {
     connectionStats,
     peerConnection,
     p2pMessages,
-    sendP2PText
+    sendP2PText,
+    resetWebRTC
   } = useWebRTC({
     signalingClient,
     isOwner,
@@ -98,7 +100,8 @@ export function App() {
     retryTransfer,
     cancelTransfer,
     clearCompleted,
-    isWakeLockActive
+    isWakeLockActive,
+    resetFileTransfer
   } = useFileTransfer({
     peerConnection,
     signalingClient
@@ -168,12 +171,38 @@ export function App() {
     }
   }, [joinRoom, rejoinRoom]);
 
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
+    resetWebRTC();
+    resetFileTransfer();
     reset();
     if (typeof window !== 'undefined' && window.location.pathname !== '/') {
       window.history.pushState(null, '', '/');
     }
-  };
+  }, [resetWebRTC, resetFileTransfer, reset]);
+
+  const handleLeaveRoom = useCallback(async () => {
+    try {
+      if (isOwner) {
+        signalingClient.closeRoom();
+      } else {
+        signalingClient.leaveRoom();
+      }
+    } catch (err) {
+      console.warn('Error sending leave/close message:', err);
+    }
+    // Wait briefly for the send to flush before resetting and navigating to Home
+    await new Promise((r) => setTimeout(r, 60));
+    handleReset();
+  }, [isOwner, signalingClient, handleReset]);
+
+  const handleStartFreshSession = useCallback(async (customName = null) => {
+    resetWebRTC();
+    resetFileTransfer();
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      window.history.pushState(null, '', '/' + window.location.search);
+    }
+    await startFreshSession(customName || myDeviceName);
+  }, [resetWebRTC, resetFileTransfer, startFreshSession, myDeviceName]);
 
   const isInRoomView = roomStatus !== 'idle';
 
@@ -207,10 +236,10 @@ export function App() {
                 : isP2PConnected
                 ? connectionType === 'lan'
                   ? 'LAN P2P'
-                  : connectionType === 'relay'
-                  ? 'Relay (server)'
                   : 'Direct P2P'
-                : 'Relay (server)'}
+                : connectionStatus === 'connected'
+                ? 'Relay (server)'
+                : 'Connecting...'}
             </span>
           </a>
 
@@ -282,7 +311,7 @@ export function App() {
             <Home
               onCreateRoom={(name) => {
                 setMyDeviceName(name);
-                createRoom(name);
+                handleStartFreshSession(name);
               }}
               onJoinRoom={(targetRoomId, targetToken, name) => {
                 setMyDeviceName(name);
@@ -303,8 +332,10 @@ export function App() {
               expiresAt={expiresAt}
               messages={p2pMessages}
               onSendMessage={sendP2PText}
-              onCloseRoom={closeRoom}
+              onLeaveRoom={handleLeaveRoom}
+              onCloseRoom={handleLeaveRoom}
               onReset={handleReset}
+              onStartFreshSession={handleStartFreshSession}
               errorMessage={errorMessage}
               isP2PConnected={isP2PConnected}
               webrtcStatus={webrtcStatus}

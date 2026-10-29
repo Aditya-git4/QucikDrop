@@ -526,4 +526,87 @@ describe('Signaling Server Integration', () => {
       roomManager.roomReconnectGraceMs = oldGrace;
     }
   });
+
+  it('the server accepts a 16392-byte binary frame and rejects an oversized text frame', async () => {
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+    const createRes = await nextMessage(wsA);
+    const { roomId, joinToken } = createRes;
+
+    const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB.on('open', resolve));
+
+    wsB.send(JSON.stringify({ type: 'room:join', version: 1, roomId, joinToken, deviceName: 'Guest' }));
+    await nextMessage(wsB); // room:joined
+    await nextMessage(wsA); // peer:joined
+
+    // 1. wsA sends a 16392-byte binary frame (16384 bytes payload + 8 bytes header)
+    const binary16392 = Buffer.alloc(16392, 0xab);
+    const peerBChunkPromise = new Promise((resolve) => {
+      wsB.once('message', (data, isBinary) => {
+        resolve({ data, isBinary });
+      });
+    });
+
+    wsA.send(binary16392, { binary: true });
+    const receivedChunk = await peerBChunkPromise;
+    assert.equal(receivedChunk.isBinary, true);
+    assert.equal(receivedChunk.data.length, 16392, 'Server must accept and relay 16392-byte binary frame');
+
+    // 2. wsA sends an oversized text frame (> 16384 bytes)
+    const oversizedText = 'X'.repeat(16385);
+    const oversizedPayload = JSON.stringify({
+      type: 'text',
+      version: 1,
+      text: oversizedText
+    });
+    assert.ok(Buffer.byteLength(oversizedPayload) > 16384);
+
+    wsA.send(oversizedPayload);
+    const errorMsg = await nextMessage(wsA);
+    assert.equal(errorMsg.type, 'room:error');
+    assert.equal(errorMsg.code, 'INVALID_PAYLOAD');
+    assert.ok(errorMsg.message.includes('exceeds maximum allowed size'));
+
+    wsA.close();
+    wsB.close();
+  });
+
+  it('guest sends room:leave -> owner receives room:closed immediately without 60s grace timeout', async () => {
+    const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsA.on('open', resolve));
+
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Owner Device' }));
+    const createRes = await nextMessage(wsA);
+    const { roomId, joinToken } = createRes;
+
+    const wsB = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
+    await new Promise(resolve => wsB.on('open', resolve));
+
+    wsB.send(JSON.stringify({ type: 'room:join', version: 1, roomId, joinToken, deviceName: 'Guest Device' }));
+    await nextMessage(wsB); // room:joined
+    await nextMessage(wsA); // peer:joined
+
+    // Guest sends room:leave
+    const ownerClosedPromise = nextMessage(wsA);
+    const guestClosedPromise = nextMessage(wsB);
+
+    const startTime = Date.now();
+    wsB.send(JSON.stringify({ type: 'room:leave', version: 1 }));
+
+    const ownerClosed = await ownerClosedPromise;
+    const elapsedTime = Date.now() - startTime;
+
+    assert.equal(ownerClosed.type, 'room:closed');
+    assert.equal(ownerClosed.reason, 'guest_left');
+    assert.ok(elapsedTime < 2000, `Expected immediate room:closed, took ${elapsedTime}ms (must not wait 60s grace period)`);
+
+    const guestClosed = await guestClosedPromise;
+    assert.equal(guestClosed.type, 'room:closed');
+
+    wsA.close();
+    wsB.close();
+  });
 });

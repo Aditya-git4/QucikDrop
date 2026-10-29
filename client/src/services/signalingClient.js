@@ -88,6 +88,7 @@ export class SignalingClient {
 
   /**
    * Establish WebSocket connection.
+   * Resolves only when the connection is fully open.
    * @param {string} url
    * @returns {Promise<void>}
    */
@@ -96,17 +97,80 @@ export class SignalingClient {
     this.explicitClose = false;
 
     return new Promise((resolve, reject) => {
-      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      // 1. If already OPEN, resolve immediately
+      if (this.ws && this.ws.readyState === 1 /* OPEN */) {
         return resolve();
       }
 
+      // 2. If currently CONNECTING, wait for it to open or fail
+      if (this.ws && this.ws.readyState === 0 /* CONNECTING */) {
+        const onOpen = () => {
+          cleanup();
+          resolve();
+        };
+        const onClose = (e) => {
+          cleanup();
+          reject(new Error(`WebSocket closed before connecting (code: ${e?.code})`));
+        };
+        const onError = (e) => {
+          cleanup();
+          reject(new Error(e?.message || 'WebSocket connection error'));
+        };
+        const cleanup = () => {
+          if (this.ws) {
+            this.ws.removeEventListener?.('open', onOpen);
+            this.ws.removeEventListener?.('close', onClose);
+            this.ws.removeEventListener?.('error', onError);
+          }
+        };
+        if (typeof this.ws.addEventListener === 'function') {
+          this.ws.addEventListener('open', onOpen);
+          this.ws.addEventListener('close', onClose);
+          this.ws.addEventListener('error', onError);
+        } else {
+          const origOpen = this.ws.onopen;
+          this.ws.onopen = (e) => {
+            if (origOpen) origOpen(e);
+            onOpen();
+          };
+          const origClose = this.ws.onclose;
+          this.ws.onclose = (e) => {
+            if (origClose) origClose(e);
+            onClose(e);
+          };
+        }
+        return;
+      }
+
+      const WsClass = typeof WebSocket !== 'undefined' ? WebSocket : globalThis.WebSocket;
+      if (!WsClass) {
+        return reject(new Error('WebSocket is not supported in this environment'));
+      }
+
       try {
-        this.ws = new WebSocket(url);
+        this.ws = new WsClass(url);
       } catch (err) {
         return reject(err);
       }
 
+      let settled = false;
+      const connectionTimer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          try {
+            this.ws?.close();
+          } catch {
+            // ignore
+          }
+          reject(new Error('Signaling server connection timed out'));
+        }
+      }, 10000);
+
       this.ws.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectionTimer);
+
         this.isConnected = true;
         this.reconnectAttempts = 0;
         try {
@@ -139,6 +203,13 @@ export class SignalingClient {
 
       this.ws.onclose = (event) => {
         this.isConnected = false;
+        if (!settled) {
+          settled = true;
+          clearTimeout(connectionTimer);
+          reject(new Error(`WebSocket closed before connecting (code: ${event.code})`));
+          return;
+        }
+
         debugLogger.logStateChange('WS', 'CLOSED', { code: event.code, reason: event.reason || 'none' }, null, this);
         this.emit('disconnected', { code: event.code, reason: event.reason });
 
@@ -151,6 +222,11 @@ export class SignalingClient {
       this.ws.onerror = (err) => {
         debugLogger.logStateChange('WS', 'ERROR', err?.message || 'WebSocket error', null, this);
         this.emit('error', err);
+        if (!settled) {
+          settled = true;
+          clearTimeout(connectionTimer);
+          reject(new Error(err?.message || 'WebSocket connection error'));
+        }
       };
 
       this.ws.onmessage = (event) => {
@@ -299,7 +375,7 @@ export class SignalingClient {
    * @param {object} payload
    */
   send(payload) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== 1 /* OPEN */) {
       throw new Error('WebSocket is not connected');
     }
     debugLogger.logOutgoing(payload?.type || 'unknown', 'websocket', null, this, payload);
@@ -378,7 +454,61 @@ export class SignalingClient {
   }
 
   /**
-   * Cleanly disconnect the WebSocket and remove all event listeners.
+   * Explicitly leave the room (guest action).
+   */
+  leaveRoom() {
+    this.send({
+      type: 'room:leave',
+      version: 1
+    });
+  }
+
+  /**
+   * Start a fresh session: cancels reconnect timers, clears activeSession, resets intentionalClose flag,
+   * cleanly closes any old socket, opens a fresh WebSocket, waits for onopen, and sends room:create once.
+   * @param {string} [deviceName]
+   * @param {string} [url]
+   * @returns {Promise<void>}
+   */
+  async startFreshSession(deviceName, url = null) {
+    this.clearActiveSession();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = 0;
+    this.explicitClose = false;
+
+    // Force close any existing socket and remove handlers to avoid side effects
+    if (this.ws) {
+      try {
+        this.ws.onopen = null;
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
+        this.ws.close();
+      } catch {
+        // ignore
+      }
+      this.ws = null;
+    }
+    this.isConnected = false;
+
+    const targetUrl = url || this.serverUrl;
+    if (!targetUrl) {
+      throw new Error('Signaling server URL is not configured');
+    }
+
+    // Connect fresh socket and WAIT for onopen
+    await this.connect(targetUrl);
+
+    // Send room:create once on the fresh open socket
+    this.createRoom(deviceName);
+  }
+
+  /**
+   * Cleanly disconnect the WebSocket and clear reconnect state.
+   * Does NOT wipe event subscribers so UI hooks remain registered.
    */
   disconnect() {
     this.explicitClose = true;
@@ -388,6 +518,10 @@ export class SignalingClient {
     }
     if (this.ws) {
       try {
+        this.ws.onopen = null;
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
         this.ws.close();
       } catch {
         // ignore
@@ -396,6 +530,5 @@ export class SignalingClient {
     }
     this.isConnected = false;
     this.reconnectAttempts = 0;
-    this.listeners.clear();
   }
 }

@@ -58,7 +58,7 @@ export class PeerConnectionManager {
     /** @type {object | null} */
     this.connectionStats = null;
     this.statsTimer = null;
-    this.bufferedThreshold = 65536; // 64 KiB backpressure limit
+    this.bufferedThreshold = 1024 * 1024; // 1 MiB backpressure low threshold
 
     // P2P DataChannel Heartbeat & Health Monitoring (Step 3)
     this.isP2PHealthy = false;
@@ -213,6 +213,14 @@ export class PeerConnectionManager {
       this.checkReadyState();
     };
 
+    if (channel.readyState === 'open') {
+      debugLogger.logStateChange('DC', 'control:already_open', null, this);
+      this.lastPongReceivedAt = Date.now();
+      this.isP2PHealthy = true;
+      this.startHeartbeat();
+      this.checkReadyState();
+    }
+
     channel.onclose = () => {
       debugLogger.logStateChange('DC', 'control:closed', null, this);
       this.stopHeartbeat();
@@ -282,6 +290,11 @@ export class PeerConnectionManager {
       debugLogger.logStateChange('DC', 'file:open', null, this);
       this.checkReadyState();
     };
+
+    if (channel.readyState === 'open') {
+      debugLogger.logStateChange('DC', 'file:already_open', null, this);
+      this.checkReadyState();
+    }
 
     channel.onclose = () => {
       debugLogger.logStateChange('DC', 'file:closed', null, this);
@@ -665,6 +678,19 @@ export class PeerConnectionManager {
 
       this.fileChannel.addEventListener('bufferedamountlow', onLow);
     });
+  }
+
+  /**
+   * Get maximum SCTP message size supported by the local WebRTC stack.
+   * Modern browsers typically support 256 KiB; older implementations support 64 KiB.
+   * @returns {number}
+   */
+  getMaxMessageSize() {
+    const sctp = this.pc?.sctp;
+    if (sctp && typeof sctp.maxMessageSize === 'number' && sctp.maxMessageSize > 0) {
+      return sctp.maxMessageSize;
+    }
+    return 16384;
   }
 
   /**

@@ -121,7 +121,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
       return;
     }
 
-    if (chunkLength > 65536) {
+    if (chunkLength > config.maxWsBinaryBytes) {
       logServerMessage({
         roomId,
         role,
@@ -129,7 +129,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         isBinary: true,
         size: chunkLength,
         outcome: 'rejected',
-        reason: 'chunk_exceeds_64kb_limit'
+        reason: `chunk_exceeds_${config.maxWsBinaryBytes}_limit`
       });
       return;
     }
@@ -716,38 +716,29 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     return;
   }
 
-  // 5. CLOSE ROOM
-  if (type === 'room:close') {
+  // 5. CLOSE OR LEAVE ROOM (Clean exit by owner or guest)
+  if (type === 'room:close' || type === 'room:leave') {
     try {
-      const memberPeerIds = roomManager.closeRoom(roomId, peerId, 'closed_by_owner');
+      const isOwner = room.ownerPeerId === peerId;
+      const closeReason = isOwner ? 'closed_by_owner' : 'guest_left';
 
       logServerMessage({
         roomId,
         role: senderRole,
-        type: 'room:close',
+        type,
         isBinary: false,
         size: msgSize,
         outcome: 'handled',
-        reason: 'closed_by_owner'
+        reason: closeReason
       });
 
-      for (const [id, member] of room.members.entries()) {
-        sendJson(member.ws, {
-          type: 'room:closed',
-          version: 1,
-          reason: 'closed_by_owner'
-        });
-        try {
-          member.ws.close(1000, 'Room closed by owner');
-        } catch {
-          // ignore
-        }
-      }
+      // Destroy room immediately without grace period and notify remaining peers
+      roomManager.destroyRoom(room, 'closed', closeReason);
     } catch (err) {
       logServerMessage({
         roomId,
         role: senderRole,
-        type: 'room:close',
+        type,
         isBinary: false,
         size: msgSize,
         outcome: 'rejected',

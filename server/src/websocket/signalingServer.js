@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import { config } from '../config/config.js';
 import { isOriginAllowed } from '../security/originValidation.js';
 import { handleIncomingMessage, sendJson } from './messageHandler.js';
 
@@ -22,6 +23,7 @@ export function createSignalingServer(httpServer, roomManager) {
   const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
+    maxPayload: config.maxWsBinaryBytes,
     // Validate origin before accepting WebSocket upgrade
     verifyClient: (info, callback) => {
       const origin = info.origin || info.req.headers.origin;

@@ -334,12 +334,24 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
     setTransfers((prev) => prev.filter((t) => t.status === 'transferring' || t.status === 'queued'));
   }, []);
 
+  /** Completely reset and destroy transfer manager, active transfers, and queue */
+  const resetFileTransfer = useCallback(() => {
+    if (managerRef.current) {
+      managerRef.current.destroy();
+      managerRef.current = null;
+    }
+    sendQueueRef.current = [];
+    isSendingRef.current = false;
+    setTransfers([]);
+  }, []);
+
   return {
     transfers,
     queueFiles,
     retryTransfer,
     cancelTransfer,
     clearCompleted,
-    isWakeLockActive
+    isWakeLockActive,
+    resetFileTransfer
   };
 }

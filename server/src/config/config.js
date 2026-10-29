@@ -26,7 +26,8 @@ export const config = {
   maxRooms: parseInt(process.env.MAX_ROOMS || '100', 10),
 
   // Message & payload limits
-  maxWsMessageBytes: parseInt(process.env.MAX_WS_MESSAGE_BYTES || '16384', 10), // 16 KiB
+  maxWsMessageBytes: parseInt(process.env.MAX_WS_MESSAGE_BYTES || '16384', 10), // 16 KiB text/JSON limit
+  maxWsBinaryBytes: parseInt(process.env.MAX_WS_BINARY_BYTES || '32768', 10), // 32 KiB binary frame limit
   maxTextLength: parseInt(process.env.MAX_TEXT_LENGTH || '4096', 10), // 4096 chars
 
   // Security & origins
