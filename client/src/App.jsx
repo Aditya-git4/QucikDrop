@@ -95,7 +95,8 @@ export function App() {
     clearCompleted,
     isWakeLockActive
   } = useFileTransfer({
-    peerConnection
+    peerConnection,
+    signalingClient
   });
 
   // PWA beforeinstallprompt handler

@@ -4,10 +4,13 @@ import { playSendSound, playSuccessSound, hapticSuccess, hapticError } from '../
 
 /**
  * useFileTransfer manages the file queue, transmission progress,
- * and receiving states for WebRTC file transfers.
- * @param {{ peerConnection: import('../services/peerConnection.js').PeerConnectionManager | null }} props
+ * and receiving states for WebRTC file transfers with WebSocket signaling relay fallback.
+ * @param {{
+ *   peerConnection: import('../services/peerConnection.js').PeerConnectionManager | null,
+ *   signalingClient?: import('../services/signalingClient.js').SignalingClient | null
+ * }} props
  */
-export function useFileTransfer({ peerConnection }) {
+export function useFileTransfer({ peerConnection, signalingClient = null }) {
   const [transfers, setTransfers] = useState([]);
   const [isWakeLockActive, setIsWakeLockActive] = useState(false);
   const managerRef = useRef(null);
@@ -77,7 +80,11 @@ export function useFileTransfer({ peerConnection }) {
     }
 
     const pc = managerRef.current.peerConnection;
-    if (!pc?.fileChannel || pc.fileChannel.readyState !== 'open') {
+    const sc = managerRef.current.signalingClient;
+    const isP2POpen = pc?.fileChannel?.readyState === 'open';
+    const isSignalingOpen = sc?.isConnected;
+
+    if (!isP2POpen && !isSignalingOpen) {
       return;
     }
 
@@ -100,11 +107,11 @@ export function useFileTransfer({ peerConnection }) {
     }
   }, []);
 
-  // Initialize FileTransferManager when peerConnection is ready
+  // Initialize FileTransferManager when peerConnection or signalingClient is ready
   useEffect(() => {
-    if (!peerConnection) return;
+    if (!peerConnection && !signalingClient) return;
 
-    const manager = new FileTransferManager(peerConnection);
+    const manager = new FileTransferManager(peerConnection, signalingClient);
     managerRef.current = manager;
 
     const handleTransferStarted = (data) => {
@@ -231,18 +238,27 @@ export function useFileTransfer({ peerConnection }) {
     const handleReady = () => {
       processSendQueue();
     };
-    peerConnection.on('ready', handleReady);
+    peerConnection?.on('ready', handleReady);
 
-    // If fileChannel is already open, immediately attempt to drain any queued files
-    if (peerConnection?.fileChannel?.readyState === 'open') {
+    // Auto-drain send queue when room/signaling is connected
+    const handleSignalingReady = () => {
+      processSendQueue();
+    };
+    signalingClient?.on('peerJoined', handleSignalingReady);
+    signalingClient?.on('roomJoined', handleSignalingReady);
+
+    // If either channel is already open, immediately attempt to drain any queued files
+    if (peerConnection?.fileChannel?.readyState === 'open' || signalingClient?.isConnected) {
       processSendQueue();
     }
 
     return () => {
-      peerConnection.off('ready', handleReady);
+      peerConnection?.off('ready', handleReady);
+      signalingClient?.off('peerJoined', handleSignalingReady);
+      signalingClient?.off('roomJoined', handleSignalingReady);
       managerRef.current = null;
     };
-  }, [peerConnection, processSendQueue]);
+  }, [peerConnection, signalingClient, processSendQueue]);
 
   /** Queue multiple files for sending (works immediately, auto-beams upon P2P connect) */
   const queueFiles = useCallback(

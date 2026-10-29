@@ -218,7 +218,7 @@ export function TransferItem({ transfer, onCancel }) {
               border: '1px solid rgba(228, 253, 151, 0.15)'
             }}
           >
-            <span>⚡ Waiting for peer to establish P2P connection to beam file...</span>
+            <span>⚡ Ready to beam file to peer...</span>
           </div>
         )}
 

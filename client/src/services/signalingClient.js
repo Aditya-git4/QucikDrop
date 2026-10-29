@@ -81,6 +81,11 @@ export class SignalingClient {
       this.ws.onopen = () => {
         this.isConnected = true;
         this.reconnectAttempts = 0;
+        try {
+          this.ws.binaryType = 'arraybuffer';
+        } catch {
+          // ignore
+        }
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
@@ -133,6 +138,15 @@ export class SignalingClient {
    * @param {string} rawData
    */
   handleMessage(rawData) {
+    if (rawData instanceof ArrayBuffer) {
+      this.emit('fileChunk', rawData);
+      return;
+    }
+    if (typeof Blob !== 'undefined' && rawData instanceof Blob) {
+      rawData.arrayBuffer().then((buf) => this.emit('fileChunk', buf)).catch(() => {});
+      return;
+    }
+
     let message;
     try {
       message = JSON.parse(rawData);
@@ -144,6 +158,13 @@ export class SignalingClient {
     if (!message || typeof message.type !== 'string') return;
 
     switch (message.type) {
+      case 'file:start':
+      case 'file:ready':
+      case 'file:complete':
+      case 'file:cancel':
+        this.emit('controlMessage', message);
+        this.emit(message.type, message);
+        break;
       case 'room:created':
       case 'room':
         if (message.joinToken) {

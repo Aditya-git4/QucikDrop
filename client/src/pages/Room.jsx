@@ -458,7 +458,7 @@ export function Room({
                     <span style={{ color: 'var(--color-lime)' }}>⚡</span> Direct File Transfer
                   </h3>
                   <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                    {isP2PConnected ? 'P2P Active' : 'Waiting for P2P...'}
+                    {isP2PConnected ? '⚡ P2P Direct' : isConnected ? '🔄 Active (Signaling Relay)' : 'Offline'}
                   </span>
                 </div>
 
@@ -466,6 +466,7 @@ export function Room({
                   onFilesSelected={onFilesSelected}
                   onPasteClipboard={handlePasteFromDeviceClipboard}
                   isP2PConnected={isP2PConnected}
+                  isConnected={isConnected}
                   disabled={isTerminated}
                 />
 

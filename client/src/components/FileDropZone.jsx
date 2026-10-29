@@ -15,6 +15,7 @@ export function FileDropZone({
   onFilesSelected,
   onPasteClipboard = null,
   isP2PConnected = false,
+  isConnected = false,
   disabled = false
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -168,7 +169,7 @@ export function FileDropZone({
               gap: '5px'
             }}
           >
-            <span>⚡</span> Ready — select files now, auto-beams when peer connects
+            <span>⚡</span> {isConnected ? 'Ready — files beam instantly across devices' : 'Waiting for peer to connect...'}
           </span>
         )}
       </div>

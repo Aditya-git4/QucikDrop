@@ -49,6 +49,29 @@ export function sendError(ws, code, message) {
  * @param {string} clientIp
  */
 export function handleIncomingMessage(roomManager, ws, rawData, isBinary, clientIp) {
+  // 0. High-performance binary file chunk streaming relay between room peers (zero disk storage)
+  if (isBinary) {
+    const binding = roomManager.getSocketBinding(ws);
+    if (!binding) return;
+    const { roomId, peerId } = binding;
+    const room = roomManager.getRoom(roomId);
+    if (!room || room.status !== 'connected') return;
+
+    const chunkLength = Buffer.isBuffer(rawData) ? rawData.length : rawData.byteLength || 0;
+    if (chunkLength > 65536) return;
+
+    const otherPeer = roomManager.getOtherPeer(roomId, peerId);
+    if (otherPeer && otherPeer.ws && otherPeer.ws.readyState === 1 /* OPEN */) {
+      try {
+        otherPeer.ws.send(rawData, { binary: true });
+        roomManager.touchActivity(roomId);
+      } catch {
+        // ignore transient socket error
+      }
+    }
+    return;
+  }
+
   const { error, data } = parseAndValidateRawMessage(rawData, isBinary);
   if (error) {
     return sendError(ws, error.code, error.message);
@@ -242,6 +265,25 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
       version: 1,
       senderPeerId: peerId,
       payload: data.payload
+    });
+    return;
+  }
+
+  // 4b. FILE TRANSFER PROTOCOL RELAY (file:start, file:ready, file:complete, file:cancel)
+  if (type === 'file:start' || type === 'file:ready' || type === 'file:complete' || type === 'file:cancel') {
+    if (room.status !== 'connected') {
+      return sendError(ws, ErrorCodes.INVALID_ROOM, 'Cannot exchange file messages until both peers have joined');
+    }
+
+    const otherPeer = roomManager.getOtherPeer(roomId, peerId);
+    if (!otherPeer || !otherPeer.ws || otherPeer.ws.readyState !== 1) {
+      return sendError(ws, ErrorCodes.INVALID_MESSAGE, 'No remote peer connected to receive file');
+    }
+
+    roomManager.touchActivity(roomId);
+    sendJson(otherPeer.ws, {
+      ...data,
+      senderPeerId: peerId
     });
     return;
   }

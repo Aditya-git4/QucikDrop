@@ -14,9 +14,11 @@ export const isFileSystemAccessSupported =
 export class FileTransferManager {
   /**
    * @param {import('./peerConnection.js').PeerConnectionManager} peerConnection
+   * @param {import('./signalingClient.js').SignalingClient} [signalingClient]
    */
-  constructor(peerConnection) {
+  constructor(peerConnection, signalingClient = null) {
     this.peerConnection = peerConnection;
+    this.signalingClient = signalingClient;
 
     /** @type {Map<string, { file: File, isCancelled: boolean, startTime: number, hasher: any }>} */
     this.activeSends = new Map();
@@ -70,12 +72,100 @@ export class FileTransferManager {
   }
 
   setupListeners() {
-    this.peerConnection.on('controlMessage', (msg) => {
-      this.handleControlMessage(msg);
-    });
+    if (this.peerConnection) {
+      this.peerConnection.on('controlMessage', (msg) => {
+        this.handleControlMessage(msg);
+      });
 
-    this.peerConnection.on('fileChunk', (chunk) => {
-      this.handleIncomingChunk(chunk);
+      this.peerConnection.on('fileChunk', (chunk) => {
+        this.handleIncomingChunk(chunk);
+      });
+    }
+
+    if (this.signalingClient) {
+      this.signalingClient.on('controlMessage', (msg) => {
+        this.handleControlMessage(msg);
+      });
+
+      this.signalingClient.on('fileChunk', (chunk) => {
+        this.handleIncomingChunk(chunk);
+      });
+    }
+  }
+
+  /**
+   * Universal message dispatcher that uses WebRTC P2P when open, or WebSocket signaling relay fallback.
+   * @param {object} payload
+   */
+  sendControl(payload) {
+    if (this.peerConnection?.controlChannel?.readyState === 'open') {
+      this.peerConnection.sendControl(payload);
+    } else if (this.signalingClient?.isConnected) {
+      this.signalingClient.send({
+        ...payload,
+        version: 1
+      });
+    } else {
+      throw new Error('No peer or signaling connection available to send file message');
+    }
+  }
+
+  /**
+   * Universal chunk dispatcher that uses WebRTC fileChannel or WebSocket binary relay.
+   * @param {ArrayBuffer} chunk
+   */
+  sendFileChunk(chunk) {
+    if (this.peerConnection?.fileChannel?.readyState === 'open') {
+      this.peerConnection.sendFileChunk(chunk);
+    } else if (this.signalingClient?.isConnected && this.signalingClient.ws?.readyState === 1 /* OPEN */) {
+      this.signalingClient.ws.send(chunk);
+    } else {
+      throw new Error('No peer or signaling connection available to stream file chunk');
+    }
+  }
+
+  /**
+   * Unified backpressure handler across WebRTC and WebSocket channels.
+   * @returns {Promise<void>}
+   */
+  waitForBufferedAmountLow() {
+    if (this.peerConnection?.fileChannel?.readyState === 'open') {
+      return this.peerConnection.waitForBufferedAmountLow();
+    }
+    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount <= 65536) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 15);
+    });
+  }
+
+  /**
+   * Unified buffer flush helper across WebRTC and WebSocket channels.
+   * @returns {Promise<void>}
+   */
+  waitForFileChannelDrained() {
+    if (
+      this.peerConnection?.fileChannel?.readyState === 'open' &&
+      typeof this.peerConnection.waitForFileChannelDrained === 'function'
+    ) {
+      return this.peerConnection.waitForFileChannelDrained();
+    }
+    if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (!this.signalingClient?.ws || this.signalingClient.ws.bufferedAmount === 0) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 10);
     });
   }
 
@@ -128,7 +218,7 @@ export class FileTransferManager {
 
     try {
       // 1. Notify receiver of file metadata
-      this.peerConnection.sendControl({
+      this.sendControl({
         type: 'file:start',
         transferId,
         fileName: safeName,
@@ -177,7 +267,7 @@ export class FileTransferManager {
         // Update cryptographic hash incrementally (O(1) memory)
         hasher.update(buffer);
 
-        this.peerConnection.sendFileChunk(buffer);
+        this.sendFileChunk(buffer);
         offset += buffer.byteLength;
 
         // Calculate speed and progress
@@ -194,29 +284,18 @@ export class FileTransferManager {
           direction: 'send'
         });
 
-        // Backpressure flow control: wait if buffer exceeds threshold
-        if (
-          this.peerConnection.fileChannel &&
-          this.peerConnection.fileChannel.bufferedAmount > this.peerConnection.bufferedThreshold
-        ) {
-          await this.peerConnection.waitForBufferedAmountLow();
-        }
+        // Backpressure flow control
+        await this.waitForBufferedAmountLow();
       }
 
       // 4. Drain all buffered file chunks before sending completion manifest
-      if (
-        this.peerConnection.fileChannel &&
-        this.peerConnection.fileChannel.bufferedAmount > 0 &&
-        typeof this.peerConnection.waitForFileChannelDrained === 'function'
-      ) {
-        await this.peerConnection.waitForFileChannelDrained();
-      }
+      await this.waitForFileChannelDrained();
 
       // 5. Compute final verified SHA-256 hash
       const fileHash = hasher.digest();
 
       // 6. Send completion manifest with cryptographic hash
-      this.peerConnection.sendControl({
+      this.sendControl({
         type: 'file:complete',
         transferId,
         fileHash,
@@ -292,7 +371,7 @@ export class FileTransferManager {
     });
 
     // Send receiver-ready handshake back to sender
-    this.peerConnection.sendControl({
+    this.sendControl({
       type: 'file:ready',
       transferId
     });
@@ -461,7 +540,7 @@ export class FileTransferManager {
     }
 
     try {
-      this.peerConnection.sendControl({
+      this.sendControl({
         type: 'file:cancel',
         transferId,
         reason
