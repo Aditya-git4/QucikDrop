@@ -60,6 +60,11 @@ export class PeerConnectionManager {
     this.statsTimer = null;
     this.bufferedThreshold = 1024 * 1024; // 1 MiB backpressure low threshold
 
+    /** @type {Set<string>} */
+    this.gatheredCandidateTypes = new Set();
+    this.negotiationStartTime = null;
+    this.timeToConnectMs = null;
+
     // P2P DataChannel Heartbeat & Health Monitoring (Step 3)
     this.isP2PHealthy = false;
     this.heartbeatTimer = null;
@@ -133,8 +138,13 @@ export class PeerConnectionManager {
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        const cand = event.candidate.toJSON();
-        debugLogger.logStateChange('ICE:candidate', cand.type || cand.candidate?.split(' ')[7] || 'gen', cand, this);
+        const cand = typeof event.candidate.toJSON === 'function' ? event.candidate.toJSON() : event.candidate;
+        const candidateType = cand.type || cand.candidate?.split(' ')[7] || 'unknown';
+        if (candidateType && candidateType !== 'unknown') {
+          this.gatheredCandidateTypes.add(candidateType);
+          this.emit('gatheredCandidates', Array.from(this.gatheredCandidateTypes));
+        }
+        debugLogger.logStateChange('ICE:candidate', candidateType, cand, this);
         this.emit('iceCandidate', cand);
       }
     };
@@ -184,6 +194,10 @@ export class PeerConnectionManager {
     this.emit('statusChange', state);
 
     if (state === 'connected') {
+      if (this.negotiationStartTime && !this.timeToConnectMs) {
+        this.timeToConnectMs = Date.now() - this.negotiationStartTime;
+        this.emit('timeToConnect', this.timeToConnectMs);
+      }
       this.startStatsPolling();
       this.updateConnectionStats();
       this.startHeartbeat();
@@ -488,13 +502,17 @@ export class PeerConnectionManager {
           ? Math.round(selectedPair.roundTripTime * 1000)
           : null;
 
+      const selectedPairType = `${localType} ↔ ${remoteType}`;
       const info = {
         connectionType, // 'lan' | 'direct' | 'relay'
         isRelayed,
         localCandidateType: localType,
         remoteCandidateType: remoteType,
+        selectedPairType,
+        gatheredCandidateTypes: Array.from(this.gatheredCandidateTypes),
         protocol: localCandidate?.protocol || remoteCandidate?.protocol || 'udp',
-        rtt
+        rtt,
+        timeToConnectMs: this.timeToConnectMs
       };
 
       this.connectionType = connectionType;
@@ -512,19 +530,35 @@ export class PeerConnectionManager {
   /**
    * Initiate WebRTC negotiation as Offerer (Host).
    * Creates data channels and returns offer SDP.
+   * Supports options such as { iceRestart: true } for ICE restarts.
+   * @param {RTCOfferOptions} [options]
    * @returns {Promise<RTCSessionDescriptionInit>}
    */
-  async createOffer() {
-    this.initPeerConnection();
+  async createOffer(options = {}) {
+    const isIceRestart = Boolean(options?.iceRestart);
 
-    // Create DataChannels on the Offerer side
-    const control = this.pc.createDataChannel('control', { ordered: true });
-    this.setupControlChannel(control);
+    if (!this.pc) {
+      this.initPeerConnection();
+    } else if (!isIceRestart && ['closed', 'failed'].includes(this.pc.connectionState)) {
+      this.initPeerConnection();
+    }
 
-    const file = this.pc.createDataChannel('file', { ordered: true });
-    this.setupFileChannel(file);
+    if (!this.negotiationStartTime) {
+      this.negotiationStartTime = Date.now();
+    }
 
-    const offer = await this.pc.createOffer();
+    // Create DataChannels on the Offerer side if not already active
+    if (!this.controlChannel || this.controlChannel.readyState === 'closed') {
+      const control = this.pc.createDataChannel('control', { ordered: true });
+      this.setupControlChannel(control);
+    }
+
+    if (!this.fileChannel || this.fileChannel.readyState === 'closed') {
+      const file = this.pc.createDataChannel('file', { ordered: true });
+      this.setupFileChannel(file);
+    }
+
+    const offer = await this.pc.createOffer(options);
     await this.pc.setLocalDescription(offer);
 
     return offer;
@@ -536,7 +570,13 @@ export class PeerConnectionManager {
    * @returns {Promise<RTCSessionDescriptionInit>}
    */
   async handleOffer(offer) {
-    this.initPeerConnection();
+    if (!this.pc || ['closed', 'failed'].includes(this.pc.connectionState)) {
+      this.initPeerConnection();
+    }
+
+    if (!this.negotiationStartTime) {
+      this.negotiationStartTime = Date.now();
+    }
 
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
     this.isRemoteDescriptionSet = true;

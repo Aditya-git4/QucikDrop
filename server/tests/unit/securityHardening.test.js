@@ -15,8 +15,8 @@ describe('Security and Reliability Hardening', () => {
       maxRoomLifetimeMs: 100
     });
 
-    const { roomId, rawJoinToken } = manager.createRoom(mockWs, 'Host');
-    manager.joinRoom(roomId, rawJoinToken, mockWs2, 'Guest');
+    const { roomId, rawJoinToken } = await manager.createRoom(mockWs, 'Host');
+    await manager.joinRoom(roomId, rawJoinToken, mockWs2, 'Guest');
 
     // Simulate activity at 40ms -> extends idle TTL to 90ms
     await new Promise(r => setTimeout(r, 40));
@@ -35,9 +35,9 @@ describe('Security and Reliability Hardening', () => {
     manager.dispose();
   });
 
-  it('guarantees idempotent room destruction without errors on duplicate close', () => {
+  it('guarantees idempotent room destruction without errors on duplicate close', async () => {
     const manager = new RoomManager();
-    const { roomId, ownerPeerId } = manager.createRoom(mockWs, 'Host');
+    const { roomId, ownerPeerId } = await manager.createRoom(mockWs, 'Host');
 
     // First close
     const closed = manager.closeRoom(roomId, ownerPeerId);
@@ -52,9 +52,9 @@ describe('Security and Reliability Hardening', () => {
     manager.dispose();
   });
 
-  it('prevents stale timers from destroying newer room generations', () => {
+  it('prevents stale timers from destroying newer room generations', async () => {
     const manager = new RoomManager();
-    const { roomId } = manager.createRoom(mockWs, 'Host');
+    const { roomId } = await manager.createRoom(mockWs, 'Host');
     const room = manager.getRoom(roomId);
     const staleGeneration = room.roomGeneration - 1;
 

@@ -158,7 +158,9 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
                 bytesTransferred: data.bytesTransferred,
                 percent: data.percent,
                 speed: data.speed,
-                status: 'transferring'
+                status: 'transferring',
+                isWaitingForAck: Boolean(data.isWaitingForAck),
+                statusText: data.statusText || null
               }
             : t
         )
@@ -203,8 +205,13 @@ export function useFileTransfer({ peerConnection, signalingClient = null }) {
     const handleTransferError = (data) => {
       hapticError();
       const isInterrupted = data.code === 'TRANSFER_INTERRUPTED' || data.error === 'Transfer interrupted';
+      const isRelayLimit = data.code === 'RELAY_LIMIT_REACHED' || data.error === 'Relay limit reached' || data.message === 'Relay limit reached';
       const statusText = isInterrupted ? 'interrupted' : 'error';
-      const messageText = isInterrupted ? 'Transfer interrupted' : (data.message || data.error);
+      const messageText = isRelayLimit
+        ? 'Relay limit reached. Try a direct connection or try again later.'
+        : isInterrupted
+        ? 'Transfer interrupted'
+        : (data.message || data.error);
 
       setTransfers((prev) => {
         const existing = prev.find((t) => t.transferId === data.transferId);

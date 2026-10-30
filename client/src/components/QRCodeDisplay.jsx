@@ -3,29 +3,31 @@ import QRCode from 'qrcode';
 import { CopyButton } from './CopyButton.jsx';
 import { hapticTap } from '../utils/soundEffects.js';
 import { isDebugEnabled } from '../utils/debugLogger.js';
+import { buildInvitationUrl } from '../utils/roomUtils.js';
+import { Share2, Clock, Smartphone, Info } from 'lucide-react';
 
 /**
- * Modern VisionOS / Apple AirDrop-style radar QR code invitation display.
- * @param {{ roomId: string, joinToken: string, expiresAt: number | null }} props
+ * Centered high-contrast QR invite panel for the waiting room state.
+ * Includes sharp QR canvas, invitation link with 1-click copy, and clean countdown.
+ * Zero emojis, clean styling.
+ * @param {{ roomId: string, joinToken: string, roomKey?: string | null, expiresAt: number | null }} props
  */
-export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
+export function QRCodeDisplay({ roomId, joinToken, roomKey = null, expiresAt }) {
   const canvasRef = useRef(null);
   const [timeLeft, setTimeLeft] = useState('');
-  const [customOrigin] = useState(() => {
-    return typeof window !== 'undefined' ? window.location.origin : '';
-  });
+  const [percentLeft, setPercentLeft] = useState(100);
+  const [initialDuration, setInitialDuration] = useState(null);
 
   const isDebug = isDebugEnabled();
-  const debugParam = isDebug ? '?debug=1' : '';
   const invitationUrl = joinToken
-    ? `${customOrigin}/room/${encodeURIComponent(roomId)}${debugParam}#token=${encodeURIComponent(joinToken)}`
+    ? buildInvitationUrl(roomId, joinToken, roomKey, isDebug)
     : '';
 
-  // Render QR Code with maximum sharpness
+  // Render high-contrast QR code
   useEffect(() => {
     if (!canvasRef.current || !invitationUrl) return;
 
-    const qrWidth = typeof window !== 'undefined' && window.innerWidth < 480 ? 180 : 220;
+    const qrWidth = typeof window !== 'undefined' && window.innerWidth < 480 ? 200 : 230;
 
     QRCode.toCanvas(
       canvasRef.current,
@@ -34,7 +36,7 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
         width: qrWidth,
         margin: 1,
         color: {
-          dark: '#0e160d',
+          dark: '#090a0f',
           light: '#ffffff'
         },
         errorCorrectionLevel: 'M'
@@ -45,26 +47,36 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
     );
   }, [invitationUrl]);
 
-  // Expiration countdown
+  // Expiration countdown with circular percentage tracking
   useEffect(() => {
     if (!expiresAt) return;
+
+    const totalLifetime = initialDuration || (expiresAt - Date.now());
+    if (!initialDuration && totalLifetime > 0) {
+      setInitialDuration(totalLifetime);
+    }
 
     const updateTimer = () => {
       const remainingMs = Math.max(0, expiresAt - Date.now());
       if (remainingMs <= 0) {
         setTimeLeft('Expired');
+        setPercentLeft(0);
         return;
       }
       const totalSec = Math.floor(remainingMs / 1000);
       const mins = Math.floor(totalSec / 60);
       const secs = totalSec % 60;
       setTimeLeft(`${mins}:${secs.toString().padStart(2, '0')}`);
+
+      if (totalLifetime > 0) {
+        setPercentLeft(Math.max(0, Math.min(100, (remainingMs / totalLifetime) * 100)));
+      }
     };
 
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [expiresAt]);
+  }, [expiresAt, initialDuration]);
 
   const isLocalhost =
     typeof window !== 'undefined' &&
@@ -76,7 +88,7 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
       try {
         await navigator.share({
           title: 'Join QuickDrop Room',
-          text: 'Connect with me on QuickDrop for instant, private peer-to-peer sharing:',
+          text: 'Connect with me on QuickDrop for instant file sharing:',
           url: invitationUrl
         });
       } catch {
@@ -87,82 +99,128 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
 
   return (
     <div
-      className="qr-display-container"
+      className="qr-invite-panel"
       style={{
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         textAlign: 'center',
-        gap: '16px',
-        padding: '20px 14px',
-        position: 'relative'
+        gap: '24px',
+        padding: '36px 20px',
+        maxWidth: '520px',
+        margin: '0 auto'
       }}
     >
-      {/* Top Status & Radar Beacon */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
-        <span className="badge badge-waiting">
-          <span className="pulse-dot" /> Waiting for peer to scan...
-        </span>
-        {timeLeft && (
+      {/* Status & Countdown Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '4px 12px',
+            background: 'rgba(99, 102, 241, 0.1)',
+            border: '1px solid rgba(99, 102, 241, 0.25)',
+            borderRadius: 'var(--radius-full)',
+            color: '#6366f1',
+            fontSize: 'var(--font-size-xs)',
+            fontWeight: 500
+          }}
+        >
           <span
             style={{
-              fontSize: '0.78rem',
-              fontWeight: 700,
-              color: 'var(--color-lime)',
+              width: '7px',
+              height: '7px',
+              borderRadius: '50%',
+              backgroundColor: '#6366f1',
+              animation: 'pulse 1.8s infinite'
+            }}
+          />
+          <span>Waiting for peer to scan...</span>
+        </div>
+
+        {timeLeft && (
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
               fontFamily: 'var(--font-mono)',
-              background: 'var(--color-lime-dim)',
-              padding: '3px 10px',
-              borderRadius: 'var(--radius-full)',
-              border: '1px solid rgba(228, 253, 151, 0.25)'
+              fontSize: 'var(--font-size-xs)',
+              fontWeight: 600,
+              color: 'var(--color-text-secondary)',
+              background: 'var(--color-bg-surface-2)',
+              border: '1px solid var(--border-subtle)',
+              padding: '4px 10px',
+              borderRadius: 'var(--radius-full)'
             }}
           >
-            ⏱ {timeLeft}
-          </span>
+            {/* SVG Circular countdown ring */}
+            <svg width="14" height="14" viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }}>
+              <circle
+                cx="8"
+                cy="8"
+                r="6.5"
+                fill="none"
+                stroke="var(--border-medium)"
+                strokeWidth="2"
+              />
+              <circle
+                cx="8"
+                cy="8"
+                r="6.5"
+                fill="none"
+                stroke="#6366f1"
+                strokeWidth="2"
+                strokeDasharray="40.84"
+                strokeDashoffset={40.84 - (40.84 * percentLeft) / 100}
+                style={{ transition: 'stroke-dashoffset 1s linear' }}
+              />
+            </svg>
+            <span>{timeLeft}</span>
+          </div>
         )}
       </div>
 
-      {/* QR Code Frame with Specular Sheen & Floating Depth */}
+      {/* High-Contrast White Rounded QR Frame */}
       <div
         className="qr-canvas-frame"
         style={{
-          position: 'relative',
-          padding: '12px',
+          padding: '16px',
           background: '#ffffff',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: '0 20px 45px rgba(0, 0, 0, 0.6), 0 0 40px rgba(228, 253, 151, 0.22)',
-          border: '3px solid rgba(228, 253, 151, 0.45)',
-          display: 'inline-flex',
-          transition: 'transform 0.3s var(--spring-bounce)'
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: '0 12px 36px rgba(0, 0, 0, 0.35)',
+          display: 'inline-flex'
         }}
       >
         <canvas
           ref={canvasRef}
-          style={{ display: 'block', borderRadius: 'var(--radius-md)' }}
+          style={{ display: 'block', borderRadius: 'var(--radius-sm)' }}
         />
       </div>
 
-      {/* Action Area & Explanatory Copy */}
-      <div style={{ maxWidth: '440px', width: '100%' }}>
+      {/* Explanatory Copy & Direct Actions */}
+      <div style={{ width: '100%' }}>
         <h3
           style={{
-            fontSize: '1.25rem',
-            fontWeight: 800,
+            fontSize: 'var(--font-size-xl)',
+            fontWeight: 600,
             letterSpacing: '-0.02em',
-            color: 'var(--color-text-main)',
+            color: 'var(--color-text-primary)',
             marginBottom: '6px'
           }}
         >
-          Scan to Connect
+          Scan to connect
         </h3>
         <p
           style={{
-            fontSize: '0.88rem',
-            color: 'var(--color-text-muted)',
-            marginBottom: '18px',
+            fontSize: 'var(--font-size-sm)',
+            color: 'var(--color-text-secondary)',
+            marginBottom: '20px',
             lineHeight: 1.55
           }}
         >
-          Point your phone camera at this QR code to join instantly, or share the secure single-use invitation link.
+          Scan with your phone's camera, or share this one-time link.
         </p>
 
         {/* Link Share Row */}
@@ -173,11 +231,11 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
             value={invitationUrl}
             className="text-input"
             style={{
-              fontSize: '0.82rem',
+              fontSize: 'var(--font-size-xs)',
               fontFamily: 'var(--font-mono)',
               flex: 1,
-              minHeight: '42px',
-              padding: '8px 14px'
+              height: '42px',
+              padding: '0 14px'
             }}
             onFocus={(e) => e.target.select()}
           />
@@ -191,33 +249,40 @@ export function QRCodeDisplay({ roomId, joinToken, expiresAt }) {
             <button
               type="button"
               className="btn btn-primary"
-              style={{ minHeight: '42px', padding: '0 16px', fontSize: '0.85rem' }}
+              style={{ height: '42px', padding: '0 16px', fontSize: 'var(--font-size-sm)' }}
               onClick={handleShare}
+              title="Share invitation link"
             >
-              Share
+              <Share2 size={15} strokeWidth={1.75} />
+              <span>Share</span>
             </button>
           )}
         </div>
 
-        {/* Wi-Fi Note for Localhost development */}
+        {/* Localhost Wi-Fi Developer Hint */}
         {isLocalhost && (
           <div
             style={{
-              marginTop: '18px',
+              marginTop: '20px',
               padding: '12px 16px',
-              backgroundColor: 'rgba(228, 253, 151, 0.08)',
-              border: '1px solid rgba(228, 253, 151, 0.2)',
+              backgroundColor: 'var(--color-bg-surface-2)',
+              border: '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-md)',
-              fontSize: '0.80rem',
-              color: 'var(--color-text-muted)',
+              fontSize: 'var(--font-size-xs)',
+              color: 'var(--color-text-secondary)',
               textAlign: 'left',
-              lineHeight: 1.5
+              display: 'flex',
+              gap: '10px',
+              alignItems: 'flex-start'
             }}
           >
-            <strong style={{ color: 'var(--color-lime)', display: 'block', marginBottom: '2px' }}>
-              💡 Testing on phone over local Wi-Fi?
-            </strong>
-            Phones cannot connect to <code>localhost</code>. Access this web app via your computer's local Wi-Fi IP address (e.g. <code>http://192.168.1.X:5000</code>).
+            <Info size={16} strokeWidth={1.75} style={{ color: '#6366f1', flexShrink: 0, marginTop: '2px' }} />
+            <div>
+              <strong style={{ color: 'var(--color-text-primary)', display: 'block', marginBottom: '2px' }}>
+                Testing on phone over Wi-Fi?
+              </strong>
+              Phones cannot reach <code>localhost</code>. Open this app using your computer's local network IP address (e.g. <code>http://192.168.1.X:5000</code>).
+            </div>
           </div>
         )}
       </div>

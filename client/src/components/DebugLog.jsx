@@ -179,6 +179,55 @@ export function DebugLog({ peerConnection = null, signalingClient = null }) {
 
       {isOpen && (
         <>
+          {/* Candidates, Selected Pair & Connection Time strip */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '4px 10px',
+              background: 'rgba(10, 20, 15, 0.85)',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+              fontSize: '10px',
+              gap: '8px',
+              flexWrap: 'wrap'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ color: '#94a3b8' }}>Gathered:</span>
+              {['host', 'srflx', 'relay'].map((type) => {
+                const isGathered = currentSnapshot.gatheredCandidateTypes?.includes(type);
+                return (
+                  <span
+                    key={type}
+                    style={{
+                      padding: '1px 5px',
+                      borderRadius: '3px',
+                      fontSize: '9px',
+                      fontWeight: isGathered ? 'bold' : 'normal',
+                      background: isGathered ? (type === 'relay' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(74, 222, 128, 0.2)') : 'rgba(255, 255, 255, 0.05)',
+                      color: isGathered ? (type === 'relay' ? '#38bdf8' : '#4ade80') : '#64748b',
+                      border: `1px solid ${isGathered ? (type === 'relay' ? 'rgba(56, 189, 248, 0.4)' : 'rgba(74, 222, 128, 0.4)') : 'transparent'}`
+                    }}
+                  >
+                    {type}
+                  </span>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span>
+                Selected Pair: <b style={{ color: currentSnapshot.selectedPairType?.includes('relay') ? '#38bdf8' : currentSnapshot.selectedPairType !== 'none' ? '#4ade80' : '#94a3b8' }}>{currentSnapshot.selectedPairType || 'none'}</b>
+              </span>
+              {currentSnapshot.timeToConnectMs != null && (
+                <span>
+                  Connect Time: <b style={{ color: '#e4fd97' }}>{currentSnapshot.timeToConnectMs} ms</b>
+                </span>
+              )}
+            </div>
+          </div>
+
           {/* Filter Bar */}
           <div
             style={{

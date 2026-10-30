@@ -6,12 +6,17 @@ import express from 'express';
 import { config } from './config/config.js';
 import { RoomManager } from './rooms/roomManager.js';
 import { createSignalingServer } from './websocket/signalingServer.js';
+import { getRelayBytesToday } from './websocket/relayLimiter.js';
+import { getTurnHealthStatus } from './config/iceServers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
 export const roomManager = new RoomManager();
+
+// Trust exactly 1 proxy hop behind Render's reverse proxy
+app.set('trust proxy', 1);
 
 // Basic security middleware headers
 app.use((req, res, next) => {
@@ -30,6 +35,8 @@ app.get('/health', (req, res) => {
     status: 'ok',
     uptime: Math.floor(process.uptime()),
     activeRooms: roomManager.rooms.size,
+    turn: getTurnHealthStatus(),
+    relayBytesToday: getRelayBytesToday(),
     timestamp: Date.now()
   });
 });
@@ -44,7 +51,7 @@ if (fs.existsSync(clientDistPath)) {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
-      } else if (filePath.includes(path.sep + 'assets' + path.sep)) {
+      } else if (/[\\/]assets[\\/]/.test(filePath)) {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       }
     }

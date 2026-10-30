@@ -30,6 +30,7 @@ describe('HTTP Endpoints & Health Check', () => {
     assert.equal(body.status, 'ok');
     assert.equal(typeof body.uptime, 'number');
     assert.equal(typeof body.activeRooms, 'number');
+    assert.ok(['configured', 'not_configured', 'degraded'].includes(body.turn));
     assert.ok(body.timestamp);
   });
 

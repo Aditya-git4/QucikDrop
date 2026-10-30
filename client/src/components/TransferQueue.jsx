@@ -2,20 +2,26 @@ import React, { useState } from 'react';
 import { TransferItem } from './TransferItem.jsx';
 import { downloadAllAsZip } from '../utils/fileUtils.js';
 import { hapticTap, playSuccessSound } from '../utils/soundEffects.js';
+import { Archive, Trash2, Inbox } from 'lucide-react';
 
 /**
  * TransferQueue displays the list of ongoing, queued, and completed file transfers.
  * Includes a 1-click "Download All (.zip)" archive generator for multiple received files.
  * @param {{
  *   transfers: any[],
- *   onCancelTransfer: (id: string) => void
+ *   onCancelTransfer: (id: string) => void,
+ *   onClearCompleted?: () => void,
+ *   onRetryTransfer?: (transfer: any) => void
  * }} props
  */
-export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = null, onRetryTransfer = null }) {
+export function TransferQueue({
+  transfers = [],
+  onCancelTransfer,
+  onClearCompleted = null,
+  onRetryTransfer = null
+}) {
   const [isZipping, setIsZipping] = useState(false);
   const [zipPercent, setZipPercent] = useState(0);
-
-  if (!transfers || transfers.length === 0) return null;
 
   const completedReceived = transfers.filter(
     (t) => t.direction === 'receive' && t.status === 'completed' && t.downloadUrl
@@ -46,15 +52,32 @@ export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = 
     }
   };
 
+  if (transfers.length === 0) {
+    return (
+      <div
+        style={{
+          padding: '32px 20px',
+          textAlign: 'center',
+          color: 'var(--color-text-muted)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '10px',
+          background: 'var(--color-bg-surface-1)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-md)'
+        }}
+      >
+        <Inbox size={28} strokeWidth={1.5} style={{ opacity: 0.6 }} />
+        <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>
+          No transfers yet. Drop a file above to begin sending.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '12px',
-        marginTop: '8px'
-      }}
-    >
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div
         style={{
           display: 'flex',
@@ -65,24 +88,9 @@ export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = 
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
+          <h3 style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
             Transfers ({transfers.length})
           </h3>
-          <span
-            style={{
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-full)',
-              background: 'rgba(228, 253, 151, 0.1)',
-              color: 'var(--color-lime)',
-              border: '1px solid rgba(228, 253, 151, 0.2)'
-            }}
-          >
-            {transfers.filter((t) => t.status === 'transferring').length > 0
-              ? '⚡ Active'
-              : 'Idle'}
-          </span>
         </div>
 
         {/* Action Buttons: ZIP & Clear Finished */}
@@ -92,48 +100,46 @@ export function TransferQueue({ transfers, onCancelTransfer, onClearCompleted = 
               type="button"
               onClick={handleDownloadZip}
               disabled={isZipping}
-              className="btn btn-secondary animate-entrance"
+              className="btn btn-secondary"
               style={{
                 padding: '4px 12px',
-                fontSize: '0.78rem',
-                minHeight: '28px',
-                background: 'rgba(228, 253, 151, 0.15)',
-                borderColor: 'rgba(228, 253, 151, 0.4)',
-                color: 'var(--color-lime)'
+                fontSize: 'var(--font-size-xs)',
+                height: '32px',
+                minHeight: '32px'
               }}
-              title="Package all received files into a single .zip download"
+              title="Download all received files as a single .zip"
             >
-              {isZipping ? `📦 Zipping ${zipPercent}%...` : `📦 Download All (${completedReceived.length}) .ZIP`}
+              <Archive size={13} strokeWidth={1.75} />
+              <span>{isZipping ? `Archiving (${zipPercent}%)...` : `Save All as ZIP (${completedReceived.length})`}</span>
             </button>
           )}
 
           {hasFinishedTransfers && onClearCompleted && (
             <button
               type="button"
-              onClick={() => {
-                hapticTap();
-                onClearCompleted();
-              }}
-              className="btn btn-secondary animate-entrance"
+              onClick={onClearCompleted}
+              className="btn btn-ghost"
               style={{
                 padding: '4px 10px',
-                fontSize: '0.74rem',
-                minHeight: '28px',
-                color: 'var(--color-text-subtle)'
+                fontSize: 'var(--font-size-xs)',
+                height: '32px',
+                minHeight: '32px'
               }}
-              title="Clear completed and cancelled files from the list"
+              title="Clear finished and cancelled transfers"
             >
-              Clear Finished
+              <Trash2 size={13} strokeWidth={1.75} />
+              <span>Clear</span>
             </button>
           )}
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {transfers.map((t) => (
+      {/* Transfer Items List */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {transfers.map((transfer) => (
           <TransferItem
-            key={t.transferId}
-            transfer={t}
+            key={transfer.transferId}
+            transfer={transfer}
             onCancel={onCancelTransfer}
             onRetry={onRetryTransfer}
           />

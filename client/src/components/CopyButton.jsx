@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { Copy, Check } from 'lucide-react';
 
 /**
- * CopyButton provides a one-click copy with native Clipboard API and legacy fallback.
+ * CopyButton provides a one-click copy with native Clipboard API and fallback.
+ * Uses consistent Lucide icons with no emojis.
  * @param {{ text: string, label?: string, successLabel?: string, className?: string }} props
  */
 export function CopyButton({ text, label = 'Copy', successLabel = 'Copied!', className = '' }) {
@@ -40,8 +42,13 @@ export function CopyButton({ text, label = 'Copy', successLabel = 'Copied!', cla
       className={`btn btn-secondary ${className}`}
       aria-label={copied ? successLabel : label}
       title={label}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
     >
-      <span>{copied ? '✓' : '📋'}</span>
+      {copied ? (
+        <Check size={14} strokeWidth={2} style={{ color: 'var(--color-status-direct)' }} />
+      ) : (
+        <Copy size={14} strokeWidth={1.75} />
+      )}
       <span>{copied ? successLabel : label}</span>
     </button>
   );

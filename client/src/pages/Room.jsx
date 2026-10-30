@@ -1,26 +1,55 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { DeviceStatus } from '../components/DeviceStatus.jsx';
-import { QRCodeDisplay } from '../components/QRCodeDisplay.jsx';
-import { TextTransfer } from '../components/TextTransfer.jsx';
-import { FileDropZone } from '../components/FileDropZone.jsx';
-import { TransferQueue } from '../components/TransferQueue.jsx';
+import { RoomSidebar } from '../components/RoomSidebar.jsx';
+import { RoomTimeline } from '../components/RoomTimeline.jsx';
+import { RoomComposer } from '../components/RoomComposer.jsx';
+import { WaitingRoomView } from '../components/WaitingRoomView.jsx';
+import { FullWindowDropZone } from '../components/FullWindowDropZone.jsx';
+import { JoinApprovalModal } from '../components/JoinApprovalModal.jsx';
+import { PinPromptModal } from '../components/PinPromptModal.jsx';
+import { JoinPendingView } from '../components/JoinPendingView.jsx';
 import { playSendSound, hapticTap, hapticError, isSoundEnabled, setSoundEnabled } from '../utils/soundEffects.js';
-import { extractFilesFromClipboard, readDeviceClipboard } from '../utils/fileUtils.js';
+import { extractFilesFromClipboard } from '../utils/fileUtils.js';
+import { isDebugEnabled } from '../utils/debugLogger.js';
+import { isSecureCryptoAvailable } from '../utils/relayCrypto.js';
+import {
+  Volume2,
+  VolumeX,
+  SunMedium,
+  Copy,
+  Check,
+  RotateCw,
+  LogOut,
+  Plus,
+  X,
+  SlidersHorizontal,
+  Activity,
+  AlertCircle,
+  Clock
+} from 'lucide-react';
 
 /**
- * Modern iOS glassmorphic Room page handling waiting, connected, WebRTC P2P file & text sharing.
- * Renders a unified side-by-side cockpit on desktop and an iOS segmented card on mobile.
+ * Redesigned Room Screen.
+ * Uses an app-shell layout: header (auto) + body (1fr, min-height: 0).
+ * Document itself never scrolls; header & composer are pinned.
+ * Desktop (>= 1024px): 3 zones
+ *   1. Left Sidebar (300px, own scroll)
+ *   2. Unified Timeline (messages + file bubbles in chronological order)
+ *   3. Pinned Composer at bottom
+ * Mobile (< 1024px):
+ *   Single column timeline + pinned composer, with a "Session" button
+ *   that opens the sidebar content as a bottom sheet.
  */
 export function Room({
   roomId,
   joinToken,
+  roomKey = null,
   roomStatus,
   isPeerReconnecting = false,
   isOwner,
   myDeviceName,
   peerDeviceName,
   expiresAt,
-  messages,
+  messages = [],
   onSendMessage,
   onLeaveRoom,
   onCloseRoom,
@@ -33,20 +62,34 @@ export function Room({
   connectionStats = null,
   transfers = [],
   isWakeLockActive = false,
+  requirePin = false,
+  roomPin = null,
+  pendingJoinRequest = null,
+  isJoinPending = false,
+  pinRequired = false,
+  pinError = null,
+  pinAttemptsRemaining = null,
+  joinDenied = false,
+  onApproveJoin = () => {},
+  onDenyJoin = () => {},
+  onCancelJoin = () => {},
+  onSubmitPin = () => {},
+  onRetryJoin = () => {},
   onFilesSelected = () => {},
   onRetryTransfer = () => {},
   onCancelTransfer = () => {},
   onClearCompleted = () => {}
 }) {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
-  const [mobileTab, setMobileTab] = useState('files'); // 'files' | 'chat' | 'info'
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
+  const [soundActive, setSoundActive] = useState(() => isSoundEnabled());
+  const [pasteNotice, setPasteNotice] = useState(null);
 
   const isConnected = roomStatus === 'connected';
   const isTerminated = ['closed', 'expired', 'error'].includes(roomStatus);
-
-  const [soundActive, setSoundActive] = useState(() => isSoundEnabled());
-  const [pasteNotice, setPasteNotice] = useState(null);
-  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
+  const isDebug = isDebugEnabled();
 
   const toggleSound = () => {
     const next = !soundActive;
@@ -55,286 +98,226 @@ export function Room({
     hapticTap();
   };
 
-  // Handle files pasted from clipboard (from global keyboard or button)
-  const handleClipboardFiles = useCallback((files) => {
-    if (!files || files.length === 0) return;
-    if (!isConnected && !isP2PConnected) {
-      hapticError();
-      setPasteNotice('⚠️ Cannot send: Waiting for peer to connect.');
-      setTimeout(() => setPasteNotice(null), 3500);
-      return;
-    }
-
-    hapticTap();
-    playSendSound();
-    onFilesSelected(files);
-    setPasteNotice(`📋 Pasted & queued ${files.length} file(s)`);
-    setTimeout(() => setPasteNotice(null), 3000);
-  }, [isConnected, isP2PConnected, onFilesSelected]);
-
-  // Handle text pasted from clipboard outside an input
-  const handleClipboardText = useCallback((text) => {
-    if (!text || !text.trim()) return;
-    if (!isConnected && !isP2PConnected) {
-      hapticError();
-      setPasteNotice('⚠️ Cannot send: Waiting for peer to connect.');
-      setTimeout(() => setPasteNotice(null), 3500);
-      return;
-    }
-
-    hapticTap();
-    playSendSound();
-    onSendMessage(text.trim());
-    setPasteNotice('📋 Pasted & sent text message');
-    setTimeout(() => setPasteNotice(null), 3000);
-  }, [isConnected, isP2PConnected, onSendMessage]);
-
-  // 1-Tap Clipboard Button for mobile & desktop
-  const handlePasteFromDeviceClipboard = useCallback(async () => {
+  // Clipboard copy handler for room code
+  const handleCopyCode = async () => {
+    if (!roomId) return;
     try {
-      const data = await readDeviceClipboard();
-      if (data.files && data.files.length > 0) {
-        handleClipboardFiles(data.files);
-      } else if (data.text) {
-        handleClipboardText(data.text);
-      } else {
-        setPasteNotice('Clipboard is empty or unsupported format.');
-        setTimeout(() => setPasteNotice(null), 3000);
-      }
+      await navigator.clipboard.writeText(roomId);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
     } catch {
-      setPasteNotice('Clipboard permission denied by browser or unavailable.');
-      setTimeout(() => setPasteNotice(null), 3500);
+      // ignore
     }
-  }, [handleClipboardFiles, handleClipboardText]);
+  };
 
   // Global Keyboard Paste Listener (Ctrl+V / Cmd+V)
   useEffect(() => {
     if (isTerminated) return;
 
     const handlePaste = (e) => {
-      // 1. Check for files/images (screenshots, copied files)
       const files = extractFilesFromClipboard(e.clipboardData);
       if (files.length > 0) {
-        // Files/Screenshots: Always intercept regardless of active element!
         e.preventDefault();
-        handleClipboardFiles(files);
-        return;
-      }
-
-      // 2. If user is currently typing in an input/textarea:
-      // Let the native input receive the text!
-      const tag = document.activeElement?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') {
-        return;
-      }
-
-      // 3. Text pasted outside inputs: beam it over chat!
-      const text = e.clipboardData?.getData('text');
-      if (text && text.trim()) {
-        e.preventDefault();
-        handleClipboardText(text);
+        hapticTap();
+        playSendSound();
+        onFilesSelected(files);
+        setPasteNotice(`Pasted & queued ${files.length} file(s)`);
+        setTimeout(() => setPasteNotice(null), 3000);
       }
     };
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [isTerminated, handleClipboardFiles, handleClipboardText]);
+  }, [isTerminated, onFilesSelected]);
 
-  const getHeaderBadgeText = () => {
-    if (isP2PConnected) {
-      if (connectionType === 'lan') return '⚡ P2P Direct (LAN)';
-      return '⚡ P2P Direct';
+  // Handle mobile visualViewport resizing (on-screen keyboard open/close)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.visualViewport) return;
+
+    const handleViewportResize = () => {
+      const vh = window.visualViewport.height;
+      document.documentElement.style.setProperty('--viewport-height', `${vh}px`);
+    };
+
+    handleViewportResize();
+    window.visualViewport.addEventListener('resize', handleViewportResize);
+    window.visualViewport.addEventListener('scroll', handleViewportResize);
+
+    return () => {
+      window.visualViewport.removeEventListener('resize', handleViewportResize);
+      window.visualViewport.removeEventListener('scroll', handleViewportResize);
+      document.documentElement.style.removeProperty('--viewport-height');
+    };
+  }, []);
+
+  // Escape key closes mobile bottom sheet
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && showMobileSidebar) {
+        setShowMobileSidebar(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showMobileSidebar]);
+
+  const getConnectionPill = () => {
+    if (isPeerReconnecting) {
+      return {
+        label: 'Reconnecting...',
+        color: 'var(--color-status-relay)',
+        dotClass: 'status-dot-relay pulse'
+      };
     }
-    if (isConnected) return '● Relay (server)';
-    if (roomStatus === 'waiting') return '○ Waiting for Peer';
-    return 'Closed';
+    if (isP2PConnected) {
+      if (connectionType === 'relay') {
+        return {
+          label: 'Via TURN',
+          color: 'var(--color-status-turn, #38bdf8)',
+          dotClass: 'status-dot-turn'
+        };
+      }
+      return {
+        label: connectionType === 'lan' ? 'Direct (LAN)' : 'Direct',
+        color: 'var(--color-status-direct)',
+        dotClass: 'status-dot-direct'
+      };
+    }
+    if (isConnected) {
+      return {
+        label: 'Server relay',
+        color: 'var(--color-status-relay)',
+        dotClass: 'status-dot-relay'
+      };
+    }
+    if (roomStatus === 'waiting') {
+      return {
+        label: 'Waiting for peer',
+        color: 'var(--color-text-muted)',
+        dotClass: 'status-dot-waiting'
+      };
+    }
+    return {
+      label: 'Closed',
+      color: 'var(--color-text-muted)',
+      dotClass: 'status-dot-closed'
+    };
   };
 
-  return (
-    <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Top Glass Room Header Bar */}
-      <div
-        className="card room-cockpit-header"
-        style={{
-          padding: '12px 18px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '12px',
-          background: 'var(--glass-surface-1)',
-          border: '1px solid var(--glass-border)'
-        }}
-      >
-        <div className="room-title-row" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            Room:
-          </span>
-          <code
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.82rem',
-              fontWeight: 600,
-              backgroundColor: 'rgba(18, 28, 17, 0.7)',
-              color: 'var(--color-lime)',
-              padding: '3px 10px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid rgba(228, 253, 151, 0.2)'
-            }}
-          >
-            {roomId ? `${roomId.slice(0, 8)}...${roomId.slice(-6)}` : 'Active'}
-          </code>
-          <span
-            className={`badge ${
-              isP2PConnected
-                ? 'badge-connected'
-                : isConnected
-                ? 'badge-connected'
-                : roomStatus === 'waiting'
-                ? 'badge-waiting'
-                : 'badge-closed'
-            }`}
-          >
-            {getHeaderBadgeText()}
-          </span>
+  const pill = getConnectionPill();
 
-          {isP2PConnected && connectionStats?.rtt != null && (
+  return (
+    <div className="room-app-shell" data-room-status={roomStatus}>
+      {/* Full-window drop zone overlay */}
+      <FullWindowDropZone onFilesSelected={onFilesSelected} disabled={isTerminated} />
+
+      {/* ====================================================================
+          1. Pinned Top Bar: Room Code, Connection Pill, Sound, Session Toggle, Actions
+          ==================================================================== */}
+      <header className="room-shell-header">
+        {/* Left: Room Code Chip & Connection Pill */}
+        <div className="header-left-group">
+          <div className="room-code-badge" title="Room Code">
+            <span className="room-code-label">ROOM</span>
+            <code className="room-code-text">
+              {roomId ? `${roomId.slice(0, 8)}...${roomId.slice(-4)}` : 'Active'}
+            </code>
             <button
               type="button"
-              onClick={() => setShowDiagnosticsModal(true)}
-              style={{
-                fontSize: '0.78rem',
-                color: 'var(--color-lime)',
-                fontFamily: 'var(--font-mono)',
-                background: 'rgba(228, 253, 151, 0.08)',
-                padding: '3px 10px',
-                borderRadius: 'var(--radius-full)',
-                border: '1px solid rgba(228, 253, 151, 0.25)',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-              title="Click to view WebRTC Diagnostics & Network Telemetry"
+              onClick={handleCopyCode}
+              className="btn-icon btn-copy-code"
+              title="Copy room code"
+              aria-label="Copy room code"
             >
-              <span>⚡ {connectionStats.rtt}ms</span>
-              <span style={{ fontSize: '0.68rem', opacity: 0.7 }}>ℹ️</span>
+              {copiedCode ? <Check size={12} className="text-direct" /> : <Copy size={12} />}
             </button>
-          )}
+          </div>
 
+          {/* Connection status pill */}
+          <div className="connection-pill-badge" style={{ color: pill.color }}>
+            <span className={`status-dot ${pill.dotClass}`} style={{ backgroundColor: pill.color }} />
+            <span>{pill.label}</span>
+          </div>
+
+          {/* Wake Lock Active Badge */}
           {isWakeLockActive && (
-            <span
-              className="badge"
-              style={{
-                fontSize: '0.74rem',
-                backgroundColor: 'rgba(228, 253, 151, 0.12)',
-                color: 'var(--color-lime)',
-                border: '1px solid rgba(228, 253, 151, 0.25)'
-              }}
-              title="Screen Wake Lock is active"
-            >
-              🔆 Screen Awake
-            </span>
+            <div className="wake-lock-pill" title="Screen awake lock is active while file transfers are in progress">
+              <SunMedium size={12} strokeWidth={2} />
+              <span>Awake</span>
+            </div>
           )}
         </div>
 
-        {/* Room Action Buttons & Sound Toggle */}
-        <div className="room-btn-row" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            type="button"
-            onClick={handlePasteFromDeviceClipboard}
-            className="btn btn-secondary"
-            style={{
-              minHeight: '36px',
-              padding: '6px 12px',
-              fontSize: '0.82rem',
-              borderRadius: 'var(--radius-full)',
-              borderColor: 'rgba(228, 253, 151, 0.3)',
-              color: 'var(--color-lime)'
-            }}
-            title="Paste image, files, or text from device clipboard"
-            aria-label="Paste from clipboard"
-          >
-            📋 Paste
-          </button>
+        {/* Right: Sound toggle, Mobile Session Button, Leave, New Room */}
+        <div className="header-right-group">
+          {/* Diagnostics button if debug is enabled */}
+          {isDebug && (
+            <button
+              type="button"
+              onClick={() => setShowDiagnosticsModal(true)}
+              className="btn btn-secondary btn-header-tool"
+              title="Open WebRTC Diagnostics"
+              aria-label="Open WebRTC Diagnostics"
+            >
+              <Activity size={14} />
+              <span className="btn-label-desktop">Diagnostics</span>
+            </button>
+          )}
 
+          {/* Sound Mute/Unmute */}
           <button
             type="button"
             onClick={toggleSound}
-            className="btn btn-secondary"
-            style={{
-              minHeight: '36px',
-              padding: '6px 12px',
-              fontSize: '0.82rem',
-              borderRadius: 'var(--radius-full)'
-            }}
-            title={soundActive ? 'Mute sound effects' : 'Unmute sound effects'}
-            aria-label={soundActive ? 'Mute sound effects' : 'Unmute sound effects'}
+            className="btn-icon btn-header-tool"
+            title={soundActive ? 'Mute audio' : 'Unmute audio'}
+            aria-label={soundActive ? 'Mute audio' : 'Unmute audio'}
           >
-            {soundActive ? '🔔 Sound On' : '🔕 Muted'}
+            {soundActive ? <Volume2 size={16} strokeWidth={1.75} /> : <VolumeX size={16} strokeWidth={1.75} />}
           </button>
 
+          {/* Mobile "Session" Button (opens bottom sheet) */}
+          {isConnected && (
+            <button
+              type="button"
+              onClick={() => setShowMobileSidebar(true)}
+              className="btn btn-secondary mobile-only-btn btn-session-sheet"
+              aria-label="Open session details"
+              aria-expanded={showMobileSidebar}
+            >
+              <SlidersHorizontal size={14} strokeWidth={1.75} />
+              <span>Session</span>
+            </button>
+          )}
+
+          {/* Leave / Close Room button */}
           {!isTerminated ? (
-            showCloseConfirm ? (
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--color-danger)', fontWeight: 600 }}>
-                  {isOwner ? 'Close room?' : 'Leave room?'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCloseConfirm(false);
-                    if (onLeaveRoom) {
-                      onLeaveRoom();
-                    } else if (onCloseRoom) {
-                      onCloseRoom();
-                    } else {
-                      onReset();
-                    }
-                  }}
-                  className="btn btn-danger"
-                  style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.82rem' }}
-                >
-                  {isOwner ? 'Confirm Close' : 'Confirm Leave'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCloseConfirm(false)}
-                  className="btn btn-secondary"
-                  style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.82rem' }}
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowCloseConfirm(true)}
-                  className="btn btn-secondary"
-                  style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
-                  aria-label={isOwner ? 'Close Room' : 'Leave Room'}
-                >
-                  {isOwner ? 'Close Room' : 'Leave Room'}
-                </button>
-                <button
-                  type="button"
-                  onClick={onStartFreshSession}
-                  className="btn btn-primary"
-                  style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
-                  aria-label="New Room"
-                >
-                  New Room
-                </button>
-              </div>
-            )
+            <div className="header-actions-row">
+              <button
+                type="button"
+                onClick={() => setShowCloseConfirm(true)}
+                className="btn btn-secondary btn-leave-action"
+                aria-label={isOwner ? 'Close Room' : 'Leave Room'}
+              >
+                <LogOut size={13} strokeWidth={1.75} />
+                <span>{isOwner ? 'Close room' : 'Leave room'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onStartFreshSession}
+                className="btn btn-primary btn-new-room-action"
+                aria-label="Start New Room"
+              >
+                <Plus size={14} strokeWidth={2} />
+                <span>New room</span>
+              </button>
+            </div>
           ) : (
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div className="header-actions-row">
               <button
                 type="button"
                 onClick={onReset}
                 className="btn btn-secondary"
-                style={{ minHeight: '36px', padding: '8px 16px', fontSize: '0.82rem', borderRadius: 'var(--radius-full)' }}
               >
                 Home
               </button>
@@ -342,368 +325,330 @@ export function Room({
                 type="button"
                 onClick={onStartFreshSession}
                 className="btn btn-primary"
-                style={{ minHeight: '36px', padding: '8px 18px', fontSize: '0.85rem' }}
               >
-                Start New Room
+                <Plus size={14} strokeWidth={2} />
+                <span>New room</span>
               </button>
             </div>
           )}
         </div>
-      </div>
+      </header>
 
-      {/* Floating Clipboard Notification Toast (Zero Layout Shift) */}
+      {/* Floating Clipboard Notification Toast */}
       {pasteNotice && (
-        <div
-          className="animate-entrance"
-          style={{
-            position: 'fixed',
-            top: '72px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 100,
-            padding: '8px 20px',
-            background: 'var(--color-lime)',
-            color: 'var(--color-lime-text)',
-            fontWeight: 800,
-            borderRadius: 'var(--radius-full)',
-            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5), 0 0 25px rgba(228, 253, 151, 0.45)',
-            textAlign: 'center',
-            fontSize: '0.86rem',
-            letterSpacing: '0.01em',
-            pointerEvents: 'none'
-          }}
-        >
-          📋 {pasteNotice}
+        <div role="status" aria-live="polite" className="paste-toast">
+          {pasteNotice}
         </div>
       )}
 
-      {/* Paired Device Status Pill Bar */}
-      <DeviceStatus
-        myDeviceName={myDeviceName}
-        peerDeviceName={peerDeviceName}
-        isOwner={isOwner}
-        isConnected={isConnected}
-        isPeerReconnecting={isPeerReconnecting}
-        isP2PConnected={isP2PConnected}
-        connectionType={connectionType}
-        connectionStats={connectionStats}
-      />
+      {/* ====================================================================
+          2. App-Shell Body Container (1fr, min-height: 0, overflow: hidden)
+          ==================================================================== */}
+      <div className="room-shell-body">
+        {/* State A: Waiting for peer to scan QR code */}
+        {roomStatus === 'waiting' && isOwner && joinToken && (
+          <WaitingRoomView
+            roomId={roomId}
+            joinToken={joinToken}
+            roomKey={roomKey}
+            requirePin={requirePin}
+            roomPin={roomPin}
+            expiresAt={expiresAt}
+            onCloseRoom={onCloseRoom || onLeaveRoom}
+          />
+        )}
 
-      {/* Peer Reconnecting Banner (Grace Period Notice) */}
-      {isPeerReconnecting && !isTerminated && (
-        <div
-          className="card animate-entrance"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '10px',
-            padding: '12px 18px',
-            background: 'rgba(250, 204, 21, 0.1)',
-            border: '1px solid rgba(250, 204, 21, 0.3)',
-            borderRadius: 'var(--radius-lg)',
-            color: 'var(--color-warning)',
-            fontWeight: 600,
-            fontSize: '0.88rem'
-          }}
-        >
-          <span style={{ animation: 'spin 1.5s linear infinite', display: 'inline-block' }}>🔄</span>
-          <span>Peer reconnecting... Waiting for connection to restore</span>
-        </div>
-      )}
+        {/* State B: Joiner waiting for host approval or denied */}
+        {(isJoinPending || joinDenied || roomStatus === 'pending_approval' || roomStatus === 'denied') && !isConnected && !isTerminated && (
+          <JoinPendingView
+            isPending={isJoinPending || roomStatus === 'pending_approval'}
+            isDenied={joinDenied || roomStatus === 'denied'}
+            errorMessage={errorMessage}
+            onCancel={onCancelJoin || onLeaveRoom || onReset}
+            onRetry={onRetryJoin}
+          />
+        )}
 
-      {/* Terminated State Banner */}
-      {isTerminated && (
-        <div
-          className="card"
-          style={{
-            textAlign: 'center',
-            padding: '36px 20px',
-            boxShadow: 'var(--glass-shadow-glow)'
-          }}
-        >
-          <div style={{ fontSize: '2.5rem', marginBottom: '10px' }}>
-            {roomStatus === 'expired' ? '⏳' : roomStatus === 'error' ? '⚠️' : '👋'}
-          </div>
-          <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
-            {roomStatus === 'expired' ? 'Room Expired' : roomStatus === 'error' ? 'Connection Error' : 'Room Ended'}
-          </h2>
-          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem', maxWidth: '440px', margin: '0 auto 24px', lineHeight: 1.55 }}>
-            {errorMessage ||
-              (roomStatus === 'expired'
-                ? 'This temporary room exceeded its lifetime limit and has expired.'
-                : 'The connection has closed. For your security, temporary room data has been discarded.')}
-          </p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-            <button
-              type="button"
-              onClick={onStartFreshSession || onReset}
-              className="btn btn-primary"
-              style={{ padding: '12px 28px' }}
-            >
-              ⚡ {roomStatus === 'error' ? 'Retry Connection' : 'Create a New Room'}
-            </button>
-            {roomStatus === 'error' && (
+        {/* State B: Connected Room (3 Zones) */}
+        {isConnected && !isTerminated && (
+          <>
+            {/* Zone 1: Left Sidebar (300px, own scroll) */}
+            <RoomSidebar
+              roomId={roomId}
+              joinToken={joinToken}
+              myDeviceName={myDeviceName}
+              peerDeviceName={peerDeviceName}
+              isOwner={isOwner}
+              isConnected={isConnected}
+              isPeerReconnecting={isPeerReconnecting}
+              isP2PConnected={isP2PConnected}
+              connectionType={connectionType}
+              connectionStats={connectionStats}
+              expiresAt={expiresAt}
+              transfers={transfers}
+              onCloseMobileSheet={() => setShowMobileSidebar(false)}
+            />
+
+            {/* Zone 2: Main Column (Unified Timeline + Pinned Composer) */}
+            <main className="room-main-column">
+              <RoomTimeline
+                messages={messages}
+                transfers={transfers}
+                myDeviceName={myDeviceName}
+                peerDeviceName={peerDeviceName}
+                onRetryTransfer={onRetryTransfer}
+                onCancelTransfer={onCancelTransfer}
+                connectionType={connectionType}
+              />
+
+              <div className="room-composer-wrapper">
+                <RoomComposer
+                  onSendMessage={onSendMessage}
+                  onFilesSelected={onFilesSelected}
+                  disabled={!isConnected}
+                />
+              </div>
+            </main>
+
+            {/* Mobile Bottom Sheet Backdrop & Sheet */}
+            {showMobileSidebar && (
+              <div
+                className="mobile-sheet-backdrop"
+                onClick={() => setShowMobileSidebar(false)}
+                aria-hidden="true"
+              >
+                <div
+                  className="mobile-sheet-content"
+                  onClick={(e) => e.stopPropagation()}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Session details"
+                >
+                  <div className="mobile-sheet-drag-handle" />
+                  <div className="mobile-sheet-header">
+                    <span className="sidebar-section-title">Session Details</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowMobileSidebar(false)}
+                      className="btn-icon"
+                      aria-label="Close session details"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div className="mobile-sheet-body">
+                    <RoomSidebar
+                      roomId={roomId}
+                      joinToken={joinToken}
+                      myDeviceName={myDeviceName}
+                      peerDeviceName={peerDeviceName}
+                      isOwner={isOwner}
+                      isConnected={isConnected}
+                      isPeerReconnecting={isPeerReconnecting}
+                      isP2PConnected={isP2PConnected}
+                      connectionType={connectionType}
+                      connectionStats={connectionStats}
+                      expiresAt={expiresAt}
+                      transfers={transfers}
+                      onCloseMobileSheet={() => setShowMobileSidebar(false)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* State C: Terminated / Expired / Closed Banner */}
+        {isTerminated && (
+          <div className="terminated-card">
+            <div className="terminated-icon-tile">
+              {roomStatus === 'expired' ? (
+                <Clock size={28} strokeWidth={1.75} />
+              ) : roomStatus === 'error' ? (
+                <AlertCircle size={28} strokeWidth={1.75} />
+              ) : (
+                <LogOut size={28} strokeWidth={1.75} />
+              )}
+            </div>
+
+            <h2 className="terminated-heading">
+              {roomStatus === 'expired' ? 'Room Expired' : roomStatus === 'error' ? 'Connection Error' : 'Room Ended'}
+            </h2>
+
+            <p className="terminated-caption">
+              {errorMessage ||
+                (roomStatus === 'expired'
+                  ? 'This temporary room exceeded its lifetime limit and has expired.'
+                  : 'The connection has closed. For your security, temporary room data has been discarded.')}
+            </p>
+
+            <div className="terminated-actions">
+              <button
+                type="button"
+                onClick={onStartFreshSession || onReset}
+                className="btn btn-primary"
+              >
+                <Plus size={16} strokeWidth={2} />
+                <span>{roomStatus === 'error' ? 'Retry Connection' : 'Create a New Room'}</span>
+              </button>
               <button
                 type="button"
                 onClick={onReset}
                 className="btn btn-secondary"
-                style={{ padding: '12px 20px' }}
               >
                 Return to Home
               </button>
-            )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Connecting State Banner */}
-      {roomStatus === 'connecting' && (
-        <div
-          className="card animate-entrance"
-          style={{
-            textAlign: 'center',
-            padding: '36px 20px',
-            border: '1px solid var(--glass-border)'
-          }}
-        >
-          <div style={{ fontSize: '2.5rem', marginBottom: '12px', animation: 'spin 2s linear infinite', display: 'inline-block' }}>
-            ⚡
-          </div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
-            Establishing Secure Room
-          </h2>
-          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.90rem', maxWidth: '380px', margin: '0 auto 20px' }}>
-            Connecting to signaling network and generating one-time room credentials...
-          </p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-            <button
-              type="button"
-              onClick={onStartFreshSession || onReset}
-              className="btn btn-secondary"
-              style={{ minHeight: '34px', padding: '6px 18px', fontSize: '0.82rem' }}
-            >
-              🔄 Retry
-            </button>
-            <button
-              type="button"
-              onClick={onReset}
-              className="btn btn-secondary"
-              style={{ minHeight: '34px', padding: '6px 18px', fontSize: '0.82rem' }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Waiting for Peer: Show QR Code & Link Card */}
-      {roomStatus === 'waiting' && isOwner && joinToken && (
-        <div className="card animate-entrance">
-          <QRCodeDisplay
-            roomId={roomId}
-            joinToken={joinToken}
-            expiresAt={expiresAt}
-          />
-        </div>
-      )}
-
-      {/* Active Room: WebRTC File & Text Sharing */}
-      {isConnected && !isTerminated && (
-        <>
-          {/* iOS Segmented Bar for Mobile Devices */}
-          <div className="mobile-room-switcher">
-            <div className="ios-segmented-control" style={{ width: '100%' }}>
+        {/* State D: Connecting to signaling network */}
+        {roomStatus === 'connecting' && (
+          <div className="connecting-card">
+            <RotateCw size={32} strokeWidth={1.75} className="spin text-brand" />
+            <h2 className="connecting-heading">Establishing room</h2>
+            <p className="connecting-caption">Connecting to signaling network and generating credentials...</p>
+            <div className="connecting-actions">
               <button
                 type="button"
-                onClick={() => setMobileTab('files')}
-                className={`ios-segment-btn ${mobileTab === 'files' ? 'active' : ''}`}
+                onClick={onStartFreshSession || onReset}
+                className="btn btn-secondary"
               >
-                <span>📁 Files</span>
-                {transfers.length > 0 && (
-                  <span
-                    style={{
-                      background: mobileTab === 'files' ? 'var(--color-canopy-dark)' : 'var(--color-lime)',
-                      color: mobileTab === 'files' ? 'var(--color-lime)' : 'var(--color-lime-text)',
-                      fontSize: '0.7rem',
-                      fontWeight: 800,
-                      padding: '1px 6px',
-                      borderRadius: 'var(--radius-full)'
-                    }}
-                  >
-                    {transfers.length}
-                  </span>
-                )}
+                Retry
               </button>
-
               <button
                 type="button"
-                onClick={() => setMobileTab('chat')}
-                className={`ios-segment-btn ${mobileTab === 'chat' ? 'active' : ''}`}
+                onClick={onReset}
+                className="btn btn-ghost"
               >
-                <span>💬 P2P Chat</span>
-                {messages.length > 0 && (
-                  <span
-                    style={{
-                      background: mobileTab === 'chat' ? 'var(--color-canopy-dark)' : 'var(--color-lime)',
-                      color: mobileTab === 'chat' ? 'var(--color-lime)' : 'var(--color-lime-text)',
-                      fontSize: '0.7rem',
-                      fontWeight: 800,
-                      padding: '1px 6px',
-                      borderRadius: 'var(--radius-full)'
-                    }}
-                  >
-                    {messages.length}
-                  </span>
-                )}
+                Cancel
               </button>
             </div>
           </div>
+        )}
+      </div>
 
-          {/* Desktop & Mobile Responsive Cockpit Grid */}
-          <div className="room-dashboard-grid">
-            {/* Left Column: File Transfer Dropzone & Queue */}
-            <div className={`desktop-column-left ${mobileTab === 'files' ? 'mobile-pane-active' : 'mobile-pane-inactive'}`}>
-              <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ color: 'var(--color-lime)' }}>⚡</span> Direct File Transfer
-                  </h3>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                    {isP2PConnected ? '⚡ P2P Direct' : isConnected ? '🔄 Active (Signaling Relay)' : 'Offline'}
-                  </span>
-                </div>
-
-                <FileDropZone
-                  onFilesSelected={onFilesSelected}
-                  onPasteClipboard={handlePasteFromDeviceClipboard}
-                  isP2PConnected={isP2PConnected}
-                  isConnected={isConnected}
-                  disabled={isTerminated}
-                />
-
-                <TransferQueue
-                  transfers={transfers}
-                  onCancelTransfer={onCancelTransfer}
-                  onRetryTransfer={onRetryTransfer}
-                  onClearCompleted={onClearCompleted}
-                />
-              </div>
-            </div>
-
-            {/* Right Column: Direct P2P Text Chat */}
-            <div className={`desktop-column-right ${mobileTab === 'chat' ? 'mobile-pane-active' : 'mobile-pane-inactive'}`}>
-              <TextTransfer
-                messages={messages}
-                onSendMessage={onSendMessage}
-                onFilesSelected={onFilesSelected}
-                isP2PConnected={isP2PConnected}
-                isConnected={isConnected}
-                disabled={isTerminated}
-              />
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* WebRTC P2P Diagnostics Modal */}
-      {showDiagnosticsModal && (
-        <div
-          className="animate-entrance"
-          onClick={() => setShowDiagnosticsModal(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '20px'
-          }}
-        >
+      {/* Confirmation Modal for Leaving/Closing */}
+      {showCloseConfirm && (
+        <div className="modal-backdrop" onClick={() => setShowCloseConfirm(false)}>
           <div
-            className="card"
+            className="modal-box"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: '460px',
-              width: '100%',
-              padding: '24px',
-              background: 'rgba(24, 38, 23, 0.95)',
-              border: '1px solid var(--color-lime-border)',
-              boxShadow: 'var(--glass-shadow-glow)'
-            }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="close-modal-title"
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '1.2rem' }}>⚡</span>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-text-main)' }}>
-                  WebRTC Network Telemetry
-                </h3>
+            <h3 id="close-modal-title" className="modal-title">
+              {isOwner ? 'Close this room?' : 'Leave this room?'}
+            </h3>
+            <p className="modal-caption">
+              {isOwner
+                ? 'Closing the room will immediately disconnect the other device and discard any unsaved files.'
+                : 'Leaving the room will end this transfer session.'}
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => setShowCloseConfirm(false)}
+                className="btn btn-secondary"
+              >
+                Stay in room
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCloseConfirm(false);
+                  if (isOwner && onCloseRoom) {
+                    onCloseRoom();
+                  } else if (onLeaveRoom) {
+                    onLeaveRoom();
+                  }
+                }}
+                className="btn btn-primary btn-danger-action"
+              >
+                {isOwner ? 'Yes, close room' : 'Yes, leave room'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diagnostics Modal for ?debug=1 */}
+      {showDiagnosticsModal && (
+        <div className="modal-backdrop" onClick={() => setShowDiagnosticsModal(false)}>
+          <div
+            className="modal-box diagnostics-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="diag-title"
+          >
+            <div className="modal-header-row">
+              <h3 id="diag-title" className="modal-title">Network Diagnostics</h3>
+              <button
+                type="button"
+                onClick={() => setShowDiagnosticsModal(false)}
+                className="btn-icon"
+                aria-label="Close diagnostics"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="diagnostics-content">
+              <div className="diag-row">
+                <span>Room ID:</span>
+                <code>{roomId}</code>
               </div>
+              <div className="diag-row">
+                <span>Signaling Status:</span>
+                <code>{roomStatus}</code>
+              </div>
+              <div className="diag-row">
+                <span>WebRTC Status:</span>
+                <code>{webrtcStatus}</code>
+              </div>
+              <div className="diag-row">
+                <span>Transport Mode:</span>
+                <code>{isP2PConnected ? (connectionType === 'relay' ? 'WebRTC (Via TURN)' : `Direct (${connectionType})`) : 'Server relay (WebSocket)'}</code>
+              </div>
+              {connectionStats && (
+                <div className="diag-row">
+                  <span>Round Trip Time (RTT):</span>
+                  <code>{Math.round(connectionStats.rtt || 0)} ms</code>
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
               <button
                 type="button"
                 onClick={() => setShowDiagnosticsModal(false)}
                 className="btn btn-secondary"
-                style={{ minHeight: '30px', padding: '2px 10px', fontSize: '0.8rem' }}
               >
-                ✕ Close
+                Close
               </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ color: 'var(--color-text-muted)' }}>Connection Type:</span>
-                <span style={{ fontWeight: 700, color: 'var(--color-lime)' }}>
-                  {connectionType === 'lan' ? '⚡ LAN Direct (Highest Speed)' : connectionType === 'relay' ? '🔄 TURN Relayed' : '⚡ STUN Direct (P2P NAT)'}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ color: 'var(--color-text-muted)' }}>Round-Trip Latency (RTT):</span>
-                <span style={{ fontWeight: 700, color: 'var(--color-text-main)', fontFamily: 'var(--font-mono)' }}>
-                  {connectionStats?.rtt != null ? `${connectionStats.rtt} ms` : 'Measuring...'}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ color: 'var(--color-text-muted)' }}>Local Device:</span>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-main)' }}>
-                  {myDeviceName || 'Local Browser'}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ color: 'var(--color-text-muted)' }}>Peer Device:</span>
-                <span style={{ fontWeight: 600, color: 'var(--color-text-main)' }}>
-                  {peerDeviceName || 'Connected Peer'}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ color: 'var(--color-text-muted)' }}>SCTP Data Channels:</span>
-                <span style={{ fontWeight: 700, color: 'var(--color-lime)' }}>
-                  control: Open • file: Open
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(15, 24, 14, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span style={{ color: 'var(--color-text-muted)' }}>Screen Awake Lock:</span>
-                <span style={{ fontWeight: 600, color: isWakeLockActive ? 'var(--color-lime)' : 'var(--color-text-muted)' }}>
-                  {isWakeLockActive ? 'Active (Prevent Sleep)' : 'Inactive'}
-                </span>
-              </div>
-            </div>
-
-            <div style={{ marginTop: '16px', textAlign: 'center' }}>
-              <p style={{ fontSize: '0.75rem', color: 'var(--color-text-subtle)' }}>
-                Transfers flow direct peer-to-peer via encrypted DTLS/SCTP. Zero intermediate server storage.
-              </p>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Host Approval Modal (when a guest requests entry) */}
+      {pendingJoinRequest && (
+        <JoinApprovalModal
+          request={pendingJoinRequest}
+          onApprove={onApproveJoin}
+          onDeny={onDenyJoin}
+        />
+      )}
+
+      {/* Guest PIN Prompt Modal (when room requires access PIN) */}
+      {pinRequired && (
+        <PinPromptModal
+          onSubmitPin={onSubmitPin}
+          onCancel={onLeaveRoom || onReset}
+          errorMessage={pinError}
+          attemptsRemaining={pinAttemptsRemaining}
+        />
       )}
     </div>
   );

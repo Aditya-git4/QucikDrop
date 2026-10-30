@@ -79,10 +79,39 @@ QuickDrop is designed with a defense-in-depth security model to ensure that even
 ### 1.10 Ephemeral TURN Credential Isolation
 - **Threat**: Root TURN credentials or API secrets leak to the client browser, allowing malicious actors to exploit relay bandwidth.
 - **Mitigation**:
-  - The server utilizes RFC 5766 / Coturn HMAC-SHA1 ephemeral credential signing (`generateEphemeralCredentials`).
-  - Root `TURN_SECRET` never leaves the server environment.
-  - Clients receive only short-lived tokens bound to their specific peer ID and expiration timestamp.
-  - ICE credentials are delivered exclusively across authenticated signaling messages (`room:created` and `room:joined`). Unauthenticated visitors cannot obtain TURN credentials.
+  - The server utilizes RFC 5766 / Coturn HMAC-SHA1 ephemeral credential signing (`generateEphemeralCredentials`) or Cloudflare Realtime TURN ephemeral credential generation.
+  - Root `TURN_KEY_ID` and `TURN_API_TOKEN` never leave the server environment and are strictly excluded from all client responses, error messages, and log lines.
+  - Clients receive only short-lived credentials (1 hour TTL, cached 45 minutes) delivered exclusively over authenticated signaling messages (`room:created`, `room:joined`, `room:rejoined`).
+
+### 1.11 Host Approval & Optional 4-Digit PIN Access Control
+- **Threat**: An intercepted QR code or leaked invite link allows an unauthorized person to join a private room.
+- **Mitigation**:
+  - **Explicit Host Approval**: By default, joining peers enter a `pending` state. The room host receives a prompt with the guest's device name and sanitized user-agent summary to explicitly "Allow" or "Deny".
+  - **Auto-Deny & 3-Strike Rule**: Join requests auto-deny after 60 seconds of host inactivity. After 3 denied or invalid attempts, the room closes permanently with reason `too_many_attempts`.
+  - **Optional 4-Digit Access PIN**: Hosts can require a 4-digit numeric PIN.
+  - **Async PBKDF2 Hashing**: The PIN is hashed using `crypto.pbkdf2` with SHA-256, a cryptographically random 16-byte salt (`generatePinSalt`), and 100,000 iterations.
+  - **Non-Blocking Benchmark**: The async implementation runs in the worker pool (~22–24 ms per hash on modern hardware, well under the ~150 ms target), preventing event loop blocking.
+  - **Constant-Time Verification**: Comparison is strictly performed using `crypto.timingSafeEqual` over the derived key buffer to prevent timing attacks.
+  - **5-Strike PIN Lockout**: 5 incorrect PIN attempts permanently destroy the room.
+  - **Plaintext PIN Isolation**: Plaintext PINs and salts are never sent to the joiner or stored in server logs.
+
+### 1.12 Reverse Proxy IP Trust & Spoof Prevention
+- **Threat**: A client connects through a reverse proxy (e.g. Render) with a spoofed `X-Forwarded-For` header to bypass rate limits or per-IP relay quotas.
+- **Mitigation**:
+  - Server configures Express `trust proxy = 1` and matches this for WebSocket upgrade requests.
+  - With exactly 1 trusted proxy hop, the trusted reverse proxy appends the real remote client IP at the **end** of `X-Forwarded-For`.
+  - IP extraction strictly takes `parts[parts.length - 1]`, preventing clients from spoofing earlier entries.
+  - IPv6-mapped IPv4 addresses (`::ffff:`) are automatically normalised to standard IPv4.
+  - When `X-Forwarded-For` is absent (local dev/direct connection), the server falls back safely to `req.socket.remoteAddress`.
+  - Telemetry logging uses `maskIp(ip)` to mask the last octet (e.g. `203.0.113.xxx`), preserving privacy and compliance.
+
+### 1.13 End-to-End Encrypted Relay Fallback
+- **Threat**: In situations where P2P connections fail and data routes through the WebSocket relay, the server could inspect messages or file contents.
+- **Mitigation**:
+  - The room creator generates a 256-bit room key client-side using WebCrypto (`crypto.getRandomValues`).
+  - The key is appended to the URL fragment (`#token=...&k=<base64url key>`) and is **never** sent to the signaling server.
+  - All text and file data relayed across the server is end-to-end encrypted with AES-256-GCM using keys derived via HKDF-SHA-256 with direction- and transfer-specific info strings.
+  - If a joiner joins without a key (manual entry), relay fallback is disabled to prevent silent fallback to plaintext.
 
 ---
 

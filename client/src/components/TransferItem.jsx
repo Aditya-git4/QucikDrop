@@ -2,37 +2,47 @@ import React, { useState } from 'react';
 import { TransferProgress } from './TransferProgress.jsx';
 import { formatBytes } from '../utils/formatBytes.js';
 import { triggerDownload, isImageMime, isVideoMime, isAudioMime } from '../utils/fileUtils.js';
+import {
+  FileText,
+  Image as ImageIcon,
+  Film,
+  Music,
+  Archive,
+  Code,
+  File as GenericFile,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Clock,
+  CheckCircle2,
+  AlertTriangle,
+  AlertCircle,
+  XCircle,
+  Download,
+  RotateCw,
+  X
+} from 'lucide-react';
 
-/**
- * Modern iOS glassmorphic file transfer card with inline media previews & lightbox.
- * @param {{
- *   transfer: {
- *     transferId: string,
- *     fileName: string,
- *     fileSize: number,
- *     mimeType?: string,
- *     direction: 'send' | 'receive',
- *     status: 'queued' | 'transferring' | 'completed' | 'cancelled' | 'error',
- *     bytesTransferred: number,
- *     percent: number,
- *     speed: number,
- *     downloadUrl: string | null,
- *     fileHash?: string,
- *     verified?: boolean,
- *     errorMessage?: string
- *   },
- *   onCancel: (id: string) => void
- * }} props
- */
-function getFileIcon(fileName = '', mimeType = '', isSend = false) {
+function getFileIconComponent(fileName = '', mimeType = '') {
   const name = fileName.toLowerCase();
-  if (mimeType.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(name)) return '🖼️';
-  if (mimeType.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(name)) return '🎙️';
-  if (mimeType.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(name)) return '🎬';
-  if (/\.(pdf|doc|docx|txt|md|rtf)$/i.test(name)) return '📄';
-  if (/\.(zip|tar|gz|7z|rar)$/i.test(name)) return '📦';
-  if (/\.(js|jsx|ts|tsx|html|css|json|py|go|rs|c|cpp)$/i.test(name)) return '💻';
-  return isSend ? '📤' : '📥';
+  if (mimeType.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(name)) {
+    return ImageIcon;
+  }
+  if (mimeType.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(name)) {
+    return Music;
+  }
+  if (mimeType.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(name)) {
+    return Film;
+  }
+  if (/\.(pdf|doc|docx|txt|md|rtf)$/i.test(name)) {
+    return FileText;
+  }
+  if (/\.(zip|tar|gz|7z|rar)$/i.test(name)) {
+    return Archive;
+  }
+  if (/\.(js|jsx|ts|tsx|html|css|json|py|go|rs|c|cpp)$/i.test(name)) {
+    return Code;
+  }
+  return GenericFile;
 }
 
 export function TransferItem({ transfer, onCancel, onRetry }) {
@@ -42,55 +52,58 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
   const isCompleted = transfer.status === 'completed';
   const isCancelled = transfer.status === 'cancelled';
   const isInterrupted = transfer.status === 'interrupted' || transfer.errorCode === 'TRANSFER_INTERRUPTED';
-  const isError = (transfer.status === 'error' || isInterrupted) && !isCancelled && !isCompleted;
+  const isRelayLimit = transfer.errorCode === 'RELAY_LIMIT_REACHED' || transfer.errorMessage?.includes('Relay limit reached') || transfer.error?.includes('Relay limit reached');
+  const isError = (transfer.status === 'error' || transfer.status === 'failed' || isInterrupted || isRelayLimit) && !isCancelled && !isCompleted;
   const isTransferring = transfer.status === 'transferring';
   const isQueued = transfer.status === 'queued';
+  const isWaitingForAck = transfer.isWaitingForAck || transfer.statusText === 'Slow receiver, waiting...';
 
   const isImage = isCompleted && transfer.downloadUrl && isImageMime(transfer.mimeType, transfer.fileName);
   const isAudio = isCompleted && transfer.downloadUrl && isAudioMime(transfer.mimeType, transfer.fileName);
   const isVideo = isCompleted && transfer.downloadUrl && isVideoMime(transfer.mimeType, transfer.fileName);
 
+  const IconComponent = getFileIconComponent(transfer.fileName, transfer.mimeType || '');
+
   return (
     <>
       <div
-        className="card animate-entrance"
+        className="transfer-card"
         style={{
           padding: '16px',
-          backgroundColor: 'var(--glass-surface-2)',
+          backgroundColor: 'var(--color-bg-surface-1)',
           border: `1px solid ${
             isInterrupted
-              ? 'rgba(250, 204, 21, 0.35)'
+              ? 'var(--color-status-relay-border)'
               : isError
-              ? 'var(--color-danger-border)'
+              ? 'var(--color-status-error-border)'
               : isCompleted
-              ? 'var(--color-success-border)'
-              : 'var(--glass-border)'
+              ? 'var(--color-status-direct-border)'
+              : 'var(--border-subtle)'
           }`,
           borderRadius: 'var(--radius-md)',
           display: 'flex',
           flexDirection: 'column',
           gap: '12px',
-          boxShadow: 'var(--glass-shadow-sm)'
+          transition: 'border-color var(--duration-fast) ease'
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', overflow: 'hidden' }}>
-            {/* Thumbnail Preview or Icon */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', overflow: 'hidden', flex: 1 }}>
+            {/* Thumbnail Preview or File Icon */}
             {isImage ? (
               <button
                 type="button"
                 onClick={() => setShowLightbox(true)}
                 style={{
-                  width: '46px',
-                  height: '46px',
+                  width: '44px',
+                  height: '44px',
                   borderRadius: 'var(--radius-sm)',
                   overflow: 'hidden',
-                  border: '1px solid rgba(228, 253, 151, 0.4)',
+                  border: '1px solid var(--border-medium)',
                   padding: 0,
                   cursor: 'pointer',
                   background: '#000',
-                  flexShrink: 0,
-                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)'
+                  flexShrink: 0
                 }}
                 title="Click to preview image full-screen"
                 aria-label="Preview image"
@@ -102,30 +115,30 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
                 />
               </button>
             ) : (
-              <span
+              <div
                 style={{
-                  fontSize: '1.25rem',
-                  width: '42px',
-                  height: '42px',
+                  width: '44px',
+                  height: '44px',
                   borderRadius: 'var(--radius-sm)',
-                  background: isCompleted ? 'var(--color-lime-dim)' : 'var(--glass-surface-3)',
+                  background: 'var(--color-bg-surface-2)',
+                  border: '1px solid var(--border-subtle)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  border: '1px solid rgba(228, 253, 151, 0.2)',
+                  color: isCompleted ? 'var(--color-status-direct)' : '#6366f1',
                   flexShrink: 0
                 }}
               >
-                {getFileIcon(transfer.fileName, transfer.mimeType || '', isSend)}
-              </span>
+                <IconComponent size={20} strokeWidth={1.75} />
+              </div>
             )}
 
-            <div style={{ overflow: 'hidden' }}>
+            <div style={{ overflow: 'hidden', flex: 1 }}>
               <div
                 style={{
-                  fontSize: '0.92rem',
-                  fontWeight: 700,
-                  color: 'var(--color-text-main)',
+                  fontSize: 'var(--font-size-sm)',
+                  fontWeight: 600,
+                  color: 'var(--color-text-primary)',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis'
@@ -134,22 +147,55 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
               >
                 {transfer.fileName}
               </div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)' }}>
-                {formatBytes(transfer.fileSize)} • {isSend ? 'Sent to peer' : 'Received from peer'}
-                {transfer.fileHash && (
-                  <span style={{ marginLeft: '6px', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-lime)' }}>
-                    [SHA-256: {transfer.fileHash.slice(0, 8)}...]
-                  </span>
+
+              <div
+                style={{
+                  fontSize: 'var(--font-size-xs)',
+                  color: 'var(--color-text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '6px',
+                  marginTop: '2px'
+                }}
+              >
+                <span>{formatBytes(transfer.fileSize)}</span>
+                <span style={{ color: 'var(--border-medium)' }}>•</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                  {isSend ? (
+                    <>
+                      <ArrowUpRight size={12} strokeWidth={2} />
+                      <span>Sent</span>
+                    </>
+                  ) : (
+                    <>
+                      <ArrowDownLeft size={12} strokeWidth={2} />
+                      <span>Received</span>
+                    </>
+                  )}
+                </span>
+
+                {transfer.verified && (
+                  <>
+                    <span style={{ color: 'var(--border-medium)' }}>•</span>
+                    <span style={{ color: 'var(--color-status-direct)', fontWeight: 500 }}>
+                      Verified
+                    </span>
+                  </>
                 )}
+
                 {isError && (
                   <div
                     style={{
-                      color: isInterrupted ? 'var(--color-warning)' : 'var(--color-danger)',
-                      fontSize: '0.74rem',
+                      width: '100%',
+                      color: (isInterrupted || isRelayLimit) ? 'var(--color-status-relay)' : 'var(--color-status-error)',
+                      fontSize: 'var(--font-size-xs)',
                       marginTop: '4px'
                     }}
                   >
-                    {isInterrupted
+                    {isRelayLimit
+                      ? 'Relay limit reached. Try a direct connection or try again later.'
+                      : isInterrupted
                       ? 'Transfer interrupted'
                       : transfer.errorMessage || transfer.error || 'Connection dropped. Tap Retry to resend.'}
                   </div>
@@ -158,18 +204,31 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
             </div>
           </div>
 
-          {/* Status Badge & Actions */}
+          {/* Status Chips & Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
             {isQueued && (
               <>
-                <span className="badge badge-waiting" style={{ fontSize: '0.74rem' }}>
-                  ⏱ Queued
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--color-text-muted)',
+                    background: 'var(--color-bg-surface-2)',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)'
+                  }}
+                >
+                  <Clock size={12} strokeWidth={1.75} />
+                  <span>Queued</span>
                 </span>
                 <button
                   type="button"
                   onClick={() => onCancel(transfer.transferId)}
-                  className="btn btn-secondary"
-                  style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+                  className="btn btn-ghost"
+                  style={{ minHeight: '32px', height: '32px', padding: '0 10px', fontSize: 'var(--font-size-xs)' }}
                 >
                   Cancel
                 </button>
@@ -178,78 +237,193 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
 
             {isCompleted && (
               <>
-                <span className="badge badge-connected" style={{ fontSize: '0.74rem' }}>
-                  {transfer.verified ? '✓ Verified' : '✓ Done'}
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--color-status-direct)',
+                    background: 'var(--color-status-direct-bg)',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--color-status-direct-border)'
+                  }}
+                >
+                  <CheckCircle2 size={13} strokeWidth={2} />
+                  <span>{transfer.verified ? 'Verified' : 'Done'}</span>
                 </span>
                 {!isSend && transfer.downloadUrl && (
                   <button
                     type="button"
                     onClick={() => triggerDownload(transfer.downloadUrl, transfer.fileName)}
                     className="btn btn-primary"
-                    style={{ minHeight: '34px', padding: '6px 14px', fontSize: '0.8rem' }}
+                    style={{
+                      minHeight: '32px',
+                      height: '32px',
+                      padding: '0 12px',
+                      fontSize: 'var(--font-size-xs)'
+                    }}
                   >
-                    💾 Save
+                    <Download size={13} strokeWidth={2} />
+                    <span>Save</span>
                   </button>
                 )}
               </>
             )}
 
             {isCancelled && (
-              <span className="badge badge-error" style={{ fontSize: '0.74rem' }}>
-                ✕ Cancelled
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: 'var(--font-size-xs)',
+                  color: 'var(--color-text-muted)',
+                  background: 'var(--color-bg-surface-2)',
+                  padding: '3px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)'
+                }}
+              >
+                <XCircle size={13} strokeWidth={1.75} />
+                <span>Cancelled</span>
               </span>
             )}
 
             {isInterrupted && (
               <>
                 <span
-                  className="badge badge-waiting"
                   style={{
-                    fontSize: '0.74rem',
-                    backgroundColor: 'rgba(250, 204, 21, 0.15)',
-                    color: 'var(--color-warning)',
-                    borderColor: 'rgba(250, 204, 21, 0.3)'
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--color-status-relay)',
+                    background: 'var(--color-status-relay-bg)',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--color-status-relay-border)'
                   }}
                 >
-                  ⚠️ Interrupted
+                  <AlertTriangle size={13} strokeWidth={2} />
+                  <span>Interrupted</span>
                 </span>
                 {isSend && transfer.file && onRetry && (
                   <button
                     type="button"
                     onClick={() => onRetry(transfer)}
                     className="btn btn-secondary"
-                    style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+                    style={{
+                      minHeight: '32px',
+                      height: '32px',
+                      padding: '0 10px',
+                      fontSize: 'var(--font-size-xs)'
+                    }}
                   >
-                    🔄 Retry
+                    <RotateCw size={13} strokeWidth={2} />
+                    <span>Retry</span>
                   </button>
                 )}
               </>
             )}
 
-            {isError && !isInterrupted && (
+            {isRelayLimit && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: 'var(--font-size-xs)',
+                  color: 'var(--color-status-relay, #f59e0b)',
+                  background: 'rgba(245, 158, 11, 0.1)',
+                  padding: '3px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(245, 158, 11, 0.25)'
+                }}
+              >
+                <AlertCircle size={13} strokeWidth={2} />
+                <span>Relay limit reached</span>
+              </span>
+            )}
+
+            {isError && !isInterrupted && !isRelayLimit && (
               <>
-                <span className="badge badge-error" style={{ fontSize: '0.74rem' }}>
-                  ✕ Failed
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--color-status-error)',
+                    background: 'var(--color-status-error-bg)',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--color-status-error-border)'
+                  }}
+                >
+                  <AlertCircle size={13} strokeWidth={2} />
+                  <span>Failed</span>
                 </span>
                 {isSend && transfer.file && onRetry && (
                   <button
                     type="button"
                     onClick={() => onRetry(transfer)}
                     className="btn btn-secondary"
-                    style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+                    style={{
+                      minHeight: '32px',
+                      height: '32px',
+                      padding: '0 10px',
+                      fontSize: 'var(--font-size-xs)'
+                    }}
                   >
-                    🔄 Retry
+                    <RotateCw size={13} strokeWidth={2} />
+                    <span>Retry</span>
                   </button>
                 )}
               </>
             )}
 
             {isTransferring && (
-              <button
-                type="button"
-                onClick={() => onCancel(transfer.transferId)}
-                className="btn btn-danger"
-                style={{ minHeight: '34px', padding: '6px 12px', fontSize: '0.78rem' }}
+              <>
+                {isWaitingForAck && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: 'var(--font-size-xs)',
+                      color: 'var(--color-status-relay, #f59e0b)',
+                      background: 'rgba(245, 158, 11, 0.1)',
+                      padding: '3px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid rgba(245, 158, 11, 0.25)'
+                    }}
+                  >
+                    <Clock size={12} strokeWidth={1.75} />
+                    <span>Slow receiver, waiting...</span>
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onCancel(transfer.transferId)}
+                  className="btn btn-ghost"
+                  style={{
+                    minHeight: '32px',
+                    height: '32px',
+                    padding: '0 10px',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--color-status-error)'
+                  }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+                  padding: '0 10px',
+                  fontSize: 'var(--font-size-xs)',
+                  color: 'var(--color-status-error)'
+                }}
               >
                 Cancel
               </button>
@@ -257,36 +431,16 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
           </div>
         </div>
 
-        {/* Queued Note */}
-        {isQueued && (
-          <div
-            style={{
-              fontSize: '0.78rem',
-              color: 'var(--color-text-muted)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 10px',
-              background: 'rgba(228, 253, 151, 0.05)',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid rgba(228, 253, 151, 0.15)'
-            }}
-          >
-            <span>⚡ Ready to beam file to peer...</span>
-          </div>
-        )}
-
         {/* Inline Audio Player */}
         {isAudio && (
-          <div style={{ padding: '6px 0' }}>
+          <div style={{ padding: '4px 0' }}>
             <audio
               controls
               src={transfer.downloadUrl}
               style={{
                 width: '100%',
-                height: '38px',
-                borderRadius: 'var(--radius-full)',
-                filter: 'invert(0.9) hue-rotate(85deg)'
+                height: '36px',
+                borderRadius: 'var(--radius-full)'
               }}
             />
           </div>
@@ -304,22 +458,6 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
           </div>
         )}
 
-        {/* Error Details */}
-        {isError && transfer.errorMessage && (
-          <div
-            style={{
-              fontSize: '0.8rem',
-              color: 'var(--color-danger)',
-              backgroundColor: 'var(--color-danger-bg)',
-              border: '1px solid var(--color-danger-border)',
-              padding: '8px 12px',
-              borderRadius: 'var(--radius-sm)'
-            }}
-          >
-            {transfer.errorMessage}
-          </div>
-        )}
-
         {/* Progress Bar when Active */}
         {isTransferring && (
           <TransferProgress
@@ -331,18 +469,17 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
         )}
       </div>
 
-      {/* Full-Screen Glass Lightbox Modal */}
+      {/* Full-Screen Lightbox Modal */}
       {showLightbox && (
         <div
           onClick={() => setShowLightbox(false)}
-          className="animate-entrance"
           style={{
             position: 'fixed',
             inset: 0,
-            zIndex: 100,
-            background: 'rgba(10, 16, 10, 0.88)',
-            backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)',
+            zIndex: 1000,
+            background: 'rgba(0, 0, 0, 0.85)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -353,43 +490,40 @@ export function TransferItem({ transfer, onCancel, onRetry }) {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
+              position: 'relative',
               maxWidth: '90vw',
-              maxHeight: '85vh',
+              maxHeight: '90vh',
               display: 'flex',
               flexDirection: 'column',
-              alignItems: 'center',
-              gap: '16px'
+              alignItems: 'center'
             }}
           >
+            <button
+              type="button"
+              onClick={() => setShowLightbox(false)}
+              className="btn-icon"
+              style={{
+                position: 'absolute',
+                top: '-48px',
+                right: '0',
+                background: 'rgba(255, 255, 255, 0.15)',
+                color: '#fff',
+                borderColor: 'transparent'
+              }}
+              aria-label="Close image preview"
+            >
+              <X size={20} strokeWidth={2} />
+            </button>
             <img
               src={transfer.downloadUrl}
               alt={transfer.fileName}
               style={{
                 maxWidth: '100%',
-                maxHeight: '70vh',
-                borderRadius: 'var(--radius-lg)',
-                boxShadow: '0 20px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(228, 253, 151, 0.25)',
-                border: '1px solid var(--glass-border-highlight)',
+                maxHeight: '80vh',
+                borderRadius: 'var(--radius-md)',
                 objectFit: 'contain'
               }}
             />
-
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => triggerDownload(transfer.downloadUrl, transfer.fileName)}
-              >
-                💾 Download {transfer.fileName}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowLightbox(false)}
-              >
-                ✕ Close
-              </button>
-            </div>
           </div>
         </div>
       )}

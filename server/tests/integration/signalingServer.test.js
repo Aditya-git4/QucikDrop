@@ -69,7 +69,8 @@ describe('Signaling Server Integration', () => {
     wsA.send(JSON.stringify({
       type: 'room:create',
       version: 1,
-      deviceName: 'Windows PC'
+      deviceName: 'Windows PC',
+      autoApprove: true
     }));
 
     const createRes = await nextMessage(wsA);
@@ -237,7 +238,8 @@ describe('Signaling Server Integration', () => {
     wsA.send(JSON.stringify({
       type: 'room:create',
       version: 1,
-      deviceName: 'Device A'
+      deviceName: 'Device A',
+      autoApprove: true
     }));
     const createRes = await nextMessage(wsA);
     const { roomId, joinToken, peerId: peerIdA } = createRes;
@@ -318,7 +320,8 @@ describe('Signaling Server Integration', () => {
     wsA.send(JSON.stringify({
       type: 'room:create',
       version: 1,
-      deviceName: 'Device A'
+      deviceName: 'Device A',
+      autoApprove: true
     }));
     await nextMessage(wsA);
 
@@ -339,7 +342,7 @@ describe('Signaling Server Integration', () => {
     const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
     await new Promise(resolve => wsA.on('open', resolve));
 
-    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host PC' }));
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host PC', autoApprove: true }));
     const createRes = await nextMessage(wsA);
     const { roomId, joinToken } = createRes;
 
@@ -399,7 +402,7 @@ describe('Signaling Server Integration', () => {
     const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
     await new Promise(resolve => wsA.on('open', resolve));
 
-    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host', autoApprove: true }));
     const createRes = await nextMessage(wsA);
     const { roomId, joinToken } = createRes;
 
@@ -437,7 +440,7 @@ describe('Signaling Server Integration', () => {
     const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
     await new Promise(resolve => wsA.on('open', resolve));
 
-    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host', autoApprove: true }));
     const createRes = await nextMessage(wsA);
     const { roomId, joinToken } = createRes;
 
@@ -497,7 +500,7 @@ describe('Signaling Server Integration', () => {
       const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
       await new Promise(resolve => wsA.on('open', resolve));
 
-      wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+      wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host', autoApprove: true }));
       const createRes = await nextMessage(wsA);
       const { roomId, joinToken } = createRes;
 
@@ -531,7 +534,7 @@ describe('Signaling Server Integration', () => {
     const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
     await new Promise(resolve => wsA.on('open', resolve));
 
-    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host' }));
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Host', autoApprove: true }));
     const createRes = await nextMessage(wsA);
     const { roomId, joinToken } = createRes;
 
@@ -578,7 +581,7 @@ describe('Signaling Server Integration', () => {
     const wsA = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
     await new Promise(resolve => wsA.on('open', resolve));
 
-    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Owner Device' }));
+    wsA.send(JSON.stringify({ type: 'room:create', version: 1, deviceName: 'Owner Device', autoApprove: true }));
     const createRes = await nextMessage(wsA);
     const { roomId, joinToken } = createRes;
 

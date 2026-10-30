@@ -17,13 +17,13 @@ export function getDeviceDefaultName() {
 }
 
 /**
- * Parse roomId from the URL path and joinToken from the URL hash.
- * Cleanly removes the secret token from the address bar after reading.
- * @returns {{ roomId: string | null, joinToken: string | null }}
+ * Parse roomId from the URL path, joinToken and roomKey (k) from the URL hash.
+ * Cleanly removes secret tokens and keys from the address bar after reading.
+ * @returns {{ roomId: string | null, joinToken: string | null, roomKey: string | null }}
  */
 export function parseInvitationFromUrl() {
   if (typeof window === 'undefined') {
-    return { roomId: null, joinToken: null };
+    return { roomId: null, joinToken: null, roomKey: null };
   }
 
   // Path format: /room/:roomId
@@ -33,37 +33,41 @@ export function parseInvitationFromUrl() {
     roomId = pathParts[1];
   }
 
-  // Hash format: #token=JOIN_TOKEN
+  // Hash format: #token=JOIN_TOKEN&k=BASE64URL_KEY
   let joinToken = null;
+  let roomKey = null;
   const hash = window.location.hash.replace(/^#/, '');
   if (hash) {
     const params = new URLSearchParams(hash);
     joinToken = params.get('token');
+    roomKey = params.get('k');
 
-    // Clean token from address bar to prevent leaking via screenshots or history,
+    // Clean token and key from address bar to prevent leaking via screenshots or history,
     // while preserving query parameters like ?debug=1 or ?relay=1
-    if (joinToken) {
+    if (joinToken || roomKey) {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
   }
 
-  return { roomId, joinToken };
+  return { roomId, joinToken, roomKey };
 }
 
 /**
  * Build the full invitation URL for QR codes and link sharing.
- * Places the join token strictly in the URL fragment (#).
+ * Places the join token and optional 256-bit encryption key strictly in the URL fragment (#).
  * @param {string} roomId
  * @param {string} joinToken
+ * @param {string | null} [roomKey=null] Base64url encoded 256-bit room key
  * @param {boolean} [includeDebug=false]
  * @returns {string}
  */
-export function buildInvitationUrl(roomId, joinToken, includeDebug = false) {
+export function buildInvitationUrl(roomId, joinToken, roomKey = null, includeDebug = false) {
   if (typeof window === 'undefined') return '';
   const origin = window.location.origin;
   const isDebug = includeDebug || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1');
   const debugParam = isDebug ? '?debug=1' : '';
-  return `${origin}/room/${encodeURIComponent(roomId)}${debugParam}#token=${encodeURIComponent(joinToken)}`;
+  const keyParam = roomKey ? `&k=${encodeURIComponent(roomKey)}` : '';
+  return `${origin}/room/${encodeURIComponent(roomId)}${debugParam}#token=${encodeURIComponent(joinToken)}${keyParam}`;
 }
 
 /**

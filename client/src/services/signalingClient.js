@@ -289,6 +289,7 @@ export class SignalingClient {
       case 'file:ready':
       case 'file:complete':
       case 'file:cancel':
+      case 'file:ack':
         this.emit('controlMessage', message);
         this.emit(message.type, message);
         break;
@@ -299,6 +300,22 @@ export class SignalingClient {
         } else if (message.peerId) {
           this.emit('roomJoined', message);
         }
+        break;
+
+      case 'room:join-pending':
+        this.emit('roomJoinPending', message);
+        break;
+
+      case 'peer:join-request':
+        this.emit('peerJoinRequest', message);
+        break;
+
+      case 'peer:join-canceled':
+        this.emit('peerJoinCanceled', message);
+        break;
+
+      case 'peer:join-timed-out':
+        this.emit('peerJoinTimedOut', message);
         break;
 
       case 'room:joined':
@@ -385,13 +402,20 @@ export class SignalingClient {
   /**
    * Send room creation request.
    * @param {string} deviceName
+   * @param {boolean} [requirePin=false]
+   * @param {string} [pin=null]
    */
-  createRoom(deviceName) {
-    this.send({
+  createRoom(deviceName, requirePin = false, pin = null) {
+    const payload = {
       type: 'room:create',
       version: 1,
       deviceName
-    });
+    };
+    if (requirePin) {
+      payload.requirePin = true;
+      if (pin) payload.pin = pin;
+    }
+    this.send(payload);
   }
 
   /**
@@ -399,14 +423,59 @@ export class SignalingClient {
    * @param {string} roomId
    * @param {string} joinToken
    * @param {string} deviceName
+   * @param {string} [pin=null]
    */
-  joinRoom(roomId, joinToken, deviceName) {
-    this.send({
+  joinRoom(roomId, joinToken, deviceName, pin = null) {
+    const payload = {
       type: 'room:join',
       version: 1,
       roomId,
       joinToken,
       deviceName
+    };
+    if (pin) {
+      payload.pin = pin;
+    }
+    this.send(payload);
+  }
+
+  /**
+   * Send host approval for pending join request.
+   * @param {string} requestId
+   * @param {boolean} [autoApprove=false]
+   */
+  approveJoin(requestId, autoApprove = false) {
+    this.send({
+      type: 'peer:join-approve',
+      version: 1,
+      requestId,
+      autoApprove: Boolean(autoApprove)
+    });
+  }
+
+  /**
+   * Send host denial for pending join request.
+   * @param {string} requestId
+   */
+  denyJoin(requestId) {
+    this.send({
+      type: 'peer:join-deny',
+      version: 1,
+      requestId
+    });
+  }
+
+  /**
+   * Cancel pending join request (joiner action).
+   * @param {string} roomId
+   * @param {string} requestId
+   */
+  cancelJoin(roomId, requestId) {
+    this.send({
+      type: 'room:cancel-join',
+      version: 1,
+      roomId,
+      requestId
     });
   }
 
@@ -468,9 +537,11 @@ export class SignalingClient {
    * cleanly closes any old socket, opens a fresh WebSocket, waits for onopen, and sends room:create once.
    * @param {string} [deviceName]
    * @param {string} [url]
+   * @param {boolean} [requirePin=false]
+   * @param {string} [pin=null]
    * @returns {Promise<void>}
    */
-  async startFreshSession(deviceName, url = null) {
+  async startFreshSession(deviceName, url = null, requirePin = false, pin = null) {
     this.clearActiveSession();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -503,7 +574,7 @@ export class SignalingClient {
     await this.connect(targetUrl);
 
     // Send room:create once on the fresh open socket
-    this.createRoom(deviceName);
+    this.createRoom(deviceName, requirePin, pin);
   }
 
   /**

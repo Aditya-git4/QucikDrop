@@ -7,10 +7,11 @@ import {
   getRoomSession,
   clearRoomSession
 } from '../utils/roomUtils.js';
+import { generateRoomKey } from '../utils/relayCrypto.js';
 
 export function useSignaling() {
   const [connectionStatus, setConnectionStatus] = useState('disconnected'); // disconnected, connecting, connected
-  const [roomStatus, setRoomStatus] = useState('idle'); // idle, waiting, connected, closed, expired, error
+  const [roomStatus, setRoomStatus] = useState('idle'); // idle, waiting, connecting, pending_approval, waiting_pin, connected, denied, closed, expired, error
   const [isPeerReconnecting, setIsPeerReconnecting] = useState(false);
   const [roomId, setRoomId] = useState(null);
   const [joinToken, setJoinToken] = useState(null);
@@ -23,8 +24,23 @@ export function useSignaling() {
   const [errorMessage, setErrorMessage] = useState(null);
   const [errorCode, setErrorCode] = useState(null);
   const [iceServers, setIceServers] = useState(null);
+  const [roomKey, setRoomKey] = useState(null);
+
+  // Host approval state
+  const [pendingJoinRequest, setPendingJoinRequest] = useState(null); // { requestId, deviceName, userAgent }
+
+  // Joiner approval & PIN state
+  const [isJoinPending, setIsJoinPending] = useState(false);
+  const [pendingRequestId, setPendingRequestId] = useState(null);
+  const [requirePin, setRequirePin] = useState(false);
+  const [roomPin, setRoomPin] = useState(null);
+  const [pinRequired, setPinRequired] = useState(false);
+  const [pinError, setPinError] = useState(null);
+  const [pinAttemptsRemaining, setPinAttemptsRemaining] = useState(null);
+  const [joinDenied, setJoinDenied] = useState(false);
 
   const clientRef = useRef(null);
+  const roomKeyRef = useRef(null);
 
   // Initialize client singleton
   if (!clientRef.current) {
@@ -57,6 +73,8 @@ export function useSignaling() {
       setIceServers(msg.iceServers || null);
       setErrorMessage(null);
       setIsPeerReconnecting(false);
+      setRequirePin(Boolean(msg.requirePin));
+      setRoomPin(msg.pin || null);
 
       if (msg.peerSecret) {
         const session = {
@@ -64,7 +82,8 @@ export function useSignaling() {
           peerId: msg.peerId,
           peerSecret: msg.peerSecret,
           isOwner: true,
-          deviceName: myDeviceName
+          deviceName: myDeviceName,
+          roomKey: roomKeyRef.current
         };
         client.setActiveSession(session);
         saveRoomSession(msg.roomId, session);
@@ -80,6 +99,12 @@ export function useSignaling() {
       setIceServers(msg.iceServers || null);
       setErrorMessage(null);
       setIsPeerReconnecting(false);
+      setIsJoinPending(false);
+      setPendingRequestId(null);
+      setPinRequired(false);
+      setPinError(null);
+      setPinAttemptsRemaining(null);
+      setJoinDenied(false);
 
       if (msg.peerSecret) {
         const session = {
@@ -87,7 +112,8 @@ export function useSignaling() {
           peerId: msg.peerId,
           peerSecret: msg.peerSecret,
           isOwner: false,
-          deviceName: myDeviceName
+          deviceName: myDeviceName,
+          roomKey: roomKeyRef.current
         };
         client.setActiveSession(session);
         saveRoomSession(msg.roomId, session);
@@ -102,12 +128,44 @@ export function useSignaling() {
       setIceServers(msg.iceServers || null);
       setErrorMessage(null);
       setIsPeerReconnecting(false);
+      setIsJoinPending(false);
+      setPendingRequestId(null);
+      const stored = getRoomSession(msg.roomId);
+      if (stored?.roomKey) {
+        roomKeyRef.current = stored.roomKey;
+        setRoomKey(stored.roomKey);
+      }
     };
 
     const handlePeerJoined = (msg) => {
       setRoomStatus('connected');
       setPeerDeviceName(msg.deviceName || 'Guest Device');
       setIsPeerReconnecting(false);
+      setPendingJoinRequest(null);
+    };
+
+    const handleRoomJoinPending = (msg) => {
+      setIsJoinPending(true);
+      setPendingRequestId(msg.requestId || null);
+      setPinRequired(false);
+      setPinError(null);
+      setRoomStatus('pending_approval');
+    };
+
+    const handlePeerJoinRequest = (msg) => {
+      setPendingJoinRequest({
+        requestId: msg.requestId,
+        deviceName: msg.deviceName || 'Unknown device',
+        userAgent: msg.userAgent || 'Web browser'
+      });
+    };
+
+    const handlePeerJoinCanceled = () => {
+      setPendingJoinRequest(null);
+    };
+
+    const handlePeerJoinTimedOut = () => {
+      setPendingJoinRequest(null);
     };
 
     const handlePeerDisconnected = () => {
@@ -168,6 +226,42 @@ export function useSignaling() {
     };
 
     const handleRoomError = (msg) => {
+      // PEER_SLOW is an internal relay backpressure signal, not a room-level error
+      if (msg?.code === 'PEER_SLOW') {
+        return;
+      }
+      if (msg?.code === 'PIN_REQUIRED') {
+        setPinRequired(true);
+        setPinError(null);
+        setRoomStatus('waiting_pin');
+        return;
+      }
+      if (msg?.code === 'INVALID_PIN') {
+        setPinRequired(true);
+        setPinError(msg.message || 'Incorrect PIN');
+        setPinAttemptsRemaining(msg.attemptsRemaining ?? null);
+        setRoomStatus('waiting_pin');
+        return;
+      }
+      if (msg?.code === 'JOIN_DENIED') {
+        setIsJoinPending(false);
+        setPendingRequestId(null);
+        setJoinDenied(true);
+        setRoomStatus('denied');
+        setErrorMessage(msg.message || 'Join request was declined by the host.');
+        return;
+      }
+      if (msg?.code === 'TOO_MANY_ATTEMPTS') {
+        setIsJoinPending(false);
+        setPendingRequestId(null);
+        setPinRequired(false);
+        setRoomStatus('closed');
+        setErrorMessage(msg.message || 'Too many attempts. Room has been closed for security.');
+        const targetSessionRoomId = client.activeSession?.roomId || roomId;
+        clearRoomSession(targetSessionRoomId);
+        client.clearActiveSession();
+        return;
+      }
       setErrorCode(msg.code);
       setErrorMessage(msg.message || 'An error occurred.');
       if (['INVALID_ROOM', 'INVALID_TOKEN', 'INVALID_REJOIN', 'ROOM_EXPIRED', 'ROOM_FULL', 'TOKEN_USED'].includes(msg.code)) {
@@ -188,6 +282,10 @@ export function useSignaling() {
     client.on('peerDisconnected', handlePeerDisconnected);
     client.on('peerReconnected', handlePeerReconnected);
     client.on('peerLeft', handlePeerLeft);
+    client.on('roomJoinPending', handleRoomJoinPending);
+    client.on('peerJoinRequest', handlePeerJoinRequest);
+    client.on('peerJoinCanceled', handlePeerJoinCanceled);
+    client.on('peerJoinTimedOut', handlePeerJoinTimedOut);
     client.on('textMessage', handleTextMessage);
     client.on('roomClosed', handleRoomClosed);
     client.on('roomExpired', handleRoomExpired);
@@ -204,6 +302,10 @@ export function useSignaling() {
       client.off('peerDisconnected', handlePeerDisconnected);
       client.off('peerReconnected', handlePeerReconnected);
       client.off('peerLeft', handlePeerLeft);
+      client.off('roomJoinPending', handleRoomJoinPending);
+      client.off('peerJoinRequest', handlePeerJoinRequest);
+      client.off('peerJoinCanceled', handlePeerJoinCanceled);
+      client.off('peerJoinTimedOut', handlePeerJoinTimedOut);
       client.off('textMessage', handleTextMessage);
       client.off('roomClosed', handleRoomClosed);
       client.off('roomExpired', handleRoomExpired);
@@ -221,7 +323,7 @@ export function useSignaling() {
   }, [client]);
 
   /** Start a fresh room session: resets state, ensures healthy open WebSocket, and sends room:create */
-  const startFreshSession = useCallback(async (deviceName) => {
+  const startFreshSession = useCallback(async (deviceName, requirePin = false, pin = null) => {
     const name = deviceName || myDeviceName;
     setMyDeviceName(name);
     setErrorMessage(null);
@@ -238,13 +340,27 @@ export function useSignaling() {
     setIceServers(null);
     setMessages([]);
     setIsPeerReconnecting(false);
+    setPendingJoinRequest(null);
+    setIsJoinPending(false);
+    setPendingRequestId(null);
+    setRequirePin(Boolean(requirePin));
+    setRoomPin(pin || null);
+    setPinRequired(false);
+    setPinError(null);
+    setPinAttemptsRemaining(null);
+    setJoinDenied(false);
 
     // Clear stored sessions
     clearRoomSession();
 
+    // Generate fresh 256-bit room key for owner client-side
+    const newRoomKey = generateRoomKey();
+    roomKeyRef.current = newRoomKey;
+    setRoomKey(newRoomKey);
+
     try {
       const wsUrl = getWebSocketUrl();
-      await client.startFreshSession(name, wsUrl);
+      await client.startFreshSession(name, wsUrl, requirePin, pin);
     } catch (err) {
       setRoomStatus('error');
       setErrorMessage(err.message || 'Failed to connect to signaling server');
@@ -252,20 +368,25 @@ export function useSignaling() {
   }, [client, myDeviceName]);
 
   /** Create a new room */
-  const createRoom = useCallback(async (deviceName) => {
-    return startFreshSession(deviceName);
+  const createRoom = useCallback(async (deviceName, requirePin = false, pin = null) => {
+    return startFreshSession(deviceName, requirePin, pin);
   }, [startFreshSession]);
 
   /** Join an existing room */
-  const joinRoom = useCallback(async (targetRoomId, targetJoinToken, deviceName) => {
+  const joinRoom = useCallback(async (targetRoomId, targetJoinToken, deviceName, targetRoomKey = null, pin = null) => {
     try {
       const name = deviceName || myDeviceName;
       setMyDeviceName(name);
+      setRoomId(targetRoomId);
+      setJoinToken(targetJoinToken);
       setErrorMessage(null);
       setErrorCode(null);
       setRoomStatus('connecting');
+      setJoinDenied(false);
+      roomKeyRef.current = targetRoomKey || null;
+      setRoomKey(targetRoomKey || null);
       await ensureConnected();
-      client.joinRoom(targetRoomId, targetJoinToken, name);
+      client.joinRoom(targetRoomId, targetJoinToken, name, pin);
     } catch (err) {
       setRoomStatus('error');
       setErrorMessage(err.message || 'Failed to connect to signaling server');
@@ -280,11 +401,17 @@ export function useSignaling() {
       setErrorMessage(null);
       setErrorCode(null);
       setRoomStatus('connecting');
+      const stored = getRoomSession(targetRoomId);
+      if (stored?.roomKey) {
+        roomKeyRef.current = stored.roomKey;
+        setRoomKey(stored.roomKey);
+      }
       const session = {
         roomId: targetRoomId,
         peerId: targetPeerId,
         peerSecret: targetSecret,
-        deviceName: name
+        deviceName: name,
+        roomKey: stored?.roomKey || roomKeyRef.current || null
       };
       client.setActiveSession(session);
       await ensureConnected();
@@ -294,6 +421,58 @@ export function useSignaling() {
       setErrorMessage(err.message || 'Failed to reconnect to room');
     }
   }, [client, myDeviceName, ensureConnected]);
+
+  /** Host approves pending join request */
+  const approveJoinRequest = useCallback((requestId, autoApprove = false) => {
+    client.approveJoin(requestId, autoApprove);
+    setPendingJoinRequest(null);
+  }, [client]);
+
+  /** Host denies pending join request */
+  const denyJoinRequest = useCallback((requestId) => {
+    client.denyJoin(requestId);
+    setPendingJoinRequest(null);
+  }, [client]);
+
+  /** Joiner cancels their pending join request */
+  const cancelJoinRequest = useCallback(() => {
+    if (roomId && pendingRequestId) {
+      client.cancelJoin(roomId, pendingRequestId);
+    }
+    setIsJoinPending(false);
+    setPendingRequestId(null);
+    setRoomStatus('idle');
+  }, [client, roomId, pendingRequestId]);
+
+  /** Joiner submits PIN */
+  const submitPin = useCallback(async (candidatePin) => {
+    if (!roomId || !joinToken) return;
+    try {
+      setErrorMessage(null);
+      setErrorCode(null);
+      setPinError(null);
+      setRoomStatus('connecting');
+      await ensureConnected();
+      client.joinRoom(roomId, joinToken, myDeviceName, candidatePin);
+    } catch (err) {
+      setErrorMessage(err.message || 'Failed to submit PIN');
+    }
+  }, [client, roomId, joinToken, myDeviceName, ensureConnected]);
+
+  /** Joiner retries after denial if attempts remain */
+  const retryJoin = useCallback(async () => {
+    if (!roomId || !joinToken) return;
+    try {
+      setErrorMessage(null);
+      setErrorCode(null);
+      setJoinDenied(false);
+      setRoomStatus('connecting');
+      await ensureConnected();
+      client.joinRoom(roomId, joinToken, myDeviceName);
+    } catch (err) {
+      setErrorMessage(err.message || 'Failed to retry join');
+    }
+  }, [client, roomId, joinToken, myDeviceName, ensureConnected]);
 
   /** Send a text message */
   const sendMessage = useCallback((text) => {
@@ -324,6 +503,8 @@ export function useSignaling() {
     if (roomId) {
       clearRoomSession(roomId);
     }
+    roomKeyRef.current = null;
+    setRoomKey(null);
     client.clearActiveSession();
     try {
       client.closeRoom();
@@ -338,6 +519,8 @@ export function useSignaling() {
     if (roomId) {
       clearRoomSession(roomId);
     }
+    roomKeyRef.current = null;
+    setRoomKey(null);
     client.clearActiveSession();
     try {
       client.leaveRoom();
@@ -352,6 +535,8 @@ export function useSignaling() {
     if (roomId) {
       clearRoomSession(roomId);
     }
+    roomKeyRef.current = null;
+    setRoomKey(null);
     client.clearActiveSession();
     client.disconnect();
     setRoomStatus('idle');
@@ -366,6 +551,15 @@ export function useSignaling() {
     setErrorMessage(null);
     setErrorCode(null);
     setIsPeerReconnecting(false);
+    setPendingJoinRequest(null);
+    setIsJoinPending(false);
+    setPendingRequestId(null);
+    setRequirePin(false);
+    setRoomPin(null);
+    setPinRequired(false);
+    setPinError(null);
+    setPinAttemptsRemaining(null);
+    setJoinDenied(false);
   }, [client, roomId]);
 
   return {
@@ -381,9 +575,21 @@ export function useSignaling() {
     peerDeviceName,
     expiresAt,
     iceServers,
+    roomKey,
     messages,
     errorMessage,
     errorCode,
+    // Approval & PIN state
+    pendingJoinRequest,
+    isJoinPending,
+    pendingRequestId,
+    requirePin,
+    roomPin,
+    pinRequired,
+    pinError,
+    pinAttemptsRemaining,
+    joinDenied,
+    // Actions
     createRoom,
     joinRoom,
     rejoinRoom,
@@ -392,6 +598,11 @@ export function useSignaling() {
     leaveRoom,
     reset,
     startFreshSession,
-    setMyDeviceName
+    setMyDeviceName,
+    approveJoinRequest,
+    denyJoinRequest,
+    cancelJoinRequest,
+    submitPin,
+    retryJoin
   };
 }

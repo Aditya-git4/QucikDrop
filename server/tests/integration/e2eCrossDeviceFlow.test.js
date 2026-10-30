@@ -92,7 +92,8 @@ describe('Cross-Device E2E Flow: Messaging & File Transfer Protocol', () => {
     const guestWs = new WebSocket(wsUrl, { headers: { origin: 'http://localhost:5173' } });
     await new Promise((resolve) => guestWs.on('open', resolve));
 
-    const hostPeerJoinedPromise = nextMessage(hostWs);
+    const hostJoinReqPromise = nextMessage(hostWs);
+    const guestPendingPromise = nextMessage(guestWs);
 
     guestWs.send(JSON.stringify({
       type: 'room:join',
@@ -102,7 +103,26 @@ describe('Cross-Device E2E Flow: Messaging & File Transfer Protocol', () => {
       deviceName: 'Android Phone'
     }));
 
-    const joinRes = await nextMessage(guestWs);
+    const guestPending = await guestPendingPromise;
+    assert.equal(guestPending.type, 'room:join-pending');
+    assert.ok(guestPending.requestId);
+
+    const hostJoinReq = await hostJoinReqPromise;
+    assert.equal(hostJoinReq.type, 'peer:join-request');
+    assert.equal(hostJoinReq.requestId, guestPending.requestId);
+    assert.equal(hostJoinReq.deviceName, 'Android Phone');
+
+    // Host approves guest
+    const hostPeerJoinedPromise = nextMessage(hostWs);
+    const guestJoinedPromise = nextMessage(guestWs);
+
+    hostWs.send(JSON.stringify({
+      type: 'peer:join-approve',
+      version: 1,
+      requestId: hostJoinReq.requestId
+    }));
+
+    const joinRes = await guestJoinedPromise;
     assert.equal(joinRes.type, 'room:joined');
     assert.equal(joinRes.ownerDeviceName, 'Windows PC');
 

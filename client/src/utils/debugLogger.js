@@ -6,6 +6,27 @@
 
 const isBrowser = typeof window !== 'undefined';
 
+function sanitizeLogDetails(details) {
+  if (!details || typeof details !== 'object') return details;
+  if (Array.isArray(details)) return details.map(sanitizeLogDetails);
+  const clean = { ...details };
+  for (const k of Object.keys(clean)) {
+    const lk = k.toLowerCase();
+    if (
+      lk.includes('key') ||
+      lk.includes('token') ||
+      lk.includes('secret') ||
+      lk === 'text' ||
+      lk === 'meta'
+    ) {
+      clean[k] = '[REDACTED]';
+    } else if (clean[k] && typeof clean[k] === 'object') {
+      clean[k] = sanitizeLogDetails(clean[k]);
+    }
+  }
+  return clean;
+}
+
 export const isDebugEnabled = () => {
   if (!isBrowser) return false;
   return new URLSearchParams(window.location.search).get('debug') === '1';
@@ -64,26 +85,33 @@ class DebugLogger {
       fileChannelState: fileChannel?.readyState || 'none',
       pcConnectionState: pc?.connectionState || (isRelayModeEnabled() ? 'disabled' : 'none'),
       pcIceState: pc?.iceConnectionState || (isRelayModeEnabled() ? 'disabled' : 'none'),
-      wsReadyState: wsState
+      wsReadyState: wsState,
+      gatheredCandidateTypes: Array.from(pcManager?.gatheredCandidateTypes || []),
+      selectedPairType: pcManager?.connectionStats?.selectedPairType || 'none',
+      timeToConnectMs: pcManager?.timeToConnectMs ?? null
     };
   }
 
   addEntry(entry) {
-    this.logs.unshift(entry);
+    const sanitizedEntry = {
+      ...entry,
+      details: sanitizeLogDetails(entry.details)
+    };
+    this.logs.unshift(sanitizedEntry);
     if (this.logs.length > this.maxLogs) {
       this.logs.pop();
     }
 
     if (isDebugEnabled()) {
-      const snap = entry.snapshot;
+      const snap = sanitizedEntry.snapshot;
       const snapStr = snap 
         ? `[CC:${snap.controlChannelState} FC:${snap.fileChannelState} PC:${snap.pcConnectionState} ICE:${snap.pcIceState} WS:${snap.wsReadyState}]`
         : '';
-      const color = entry.direction === 'OUT' ? '#38bdf8' : entry.direction === 'IN' ? '#4ade80' : '#facc15';
+      const color = sanitizedEntry.direction === 'OUT' ? '#38bdf8' : sanitizedEntry.direction === 'IN' ? '#4ade80' : '#facc15';
       console.log(
-        `%c[${entry.timestamp}] [${entry.direction}] [${entry.transport || 'SYSTEM'}] ${entry.type} ${snapStr}`,
+        `%c[${sanitizedEntry.timestamp}] [${sanitizedEntry.direction}] [${sanitizedEntry.transport || 'SYSTEM'}] ${sanitizedEntry.type} ${snapStr}`,
         `color: ${color}; font-weight: bold;`,
-        entry.details || ''
+        sanitizedEntry.details || ''
       );
     }
 

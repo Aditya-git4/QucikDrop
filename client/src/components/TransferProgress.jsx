@@ -1,8 +1,10 @@
 import React from 'react';
 import { formatBytes, formatSpeed } from '../utils/formatBytes.js';
+import { Clock, Zap } from 'lucide-react';
 
 /**
- * Modern iOS glassmorphic progress bar with Lime Sprout glow fill, ETA, and live throughput wave.
+ * Modern progress indicator with electric gradient fill, ETA, and live throughput in monospace.
+ * Zero emojis, clean styling.
  * @param {{
  *   percent: number,
  *   bytesTransferred: number,
@@ -18,47 +20,48 @@ export function TransferProgress({ percent, bytesTransferred, totalBytes, speed 
 
   const formatEta = (sec) => {
     if (sec == null) return null;
-    if (sec < 60) return `${sec}s left`;
+    if (sec < 60) return `${sec}s remaining`;
     const m = Math.floor(sec / 60);
     const s = sec % 60;
-    return `${m}m ${s}s left`;
+    return `${m}m ${s}s remaining`;
   };
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-      {/* iOS Progress Track with Breathing Glow */}
+      {/* Progress Track */}
       <div
         style={{
           width: '100%',
-          height: '8px',
-          backgroundColor: 'rgba(18, 28, 17, 0.85)',
-          border: '1px solid rgba(228, 253, 151, 0.2)',
+          height: '6px',
+          backgroundColor: 'var(--color-bg-surface-3)',
           borderRadius: 'var(--radius-full)',
           overflow: 'hidden',
-          boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.6)',
           position: 'relative'
         }}
+        role="progressbar"
+        aria-valuenow={safePercent}
+        aria-valuemin={0}
+        aria-valuemax={100}
       >
         <div
           style={{
             width: `${safePercent}%`,
             height: '100%',
-            background: 'linear-gradient(90deg, #b8e645 0%, var(--color-lime) 100%)',
+            background: 'var(--accent-gradient)',
             borderRadius: 'var(--radius-full)',
-            boxShadow: '0 0 14px rgba(228, 253, 151, 0.75)',
-            transition: 'width 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
+            transition: 'width 0.2s var(--ease-apple)'
           }}
         />
       </div>
 
-      {/* Progress Stats, ETA & Throughput */}
+      {/* Stats & Throughput */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          fontSize: '0.74rem',
-          color: 'var(--color-text-muted)',
+          fontSize: 'var(--font-size-xs)',
+          color: 'var(--color-text-secondary)',
           fontFamily: 'var(--font-mono)'
         }}
       >
@@ -66,24 +69,29 @@ export function TransferProgress({ percent, bytesTransferred, totalBytes, speed 
           {formatBytes(bytesTransferred)} / {formatBytes(totalBytes)} ({safePercent}%)
         </span>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {etaSeconds != null && (
-            <span style={{ color: 'var(--color-text-subtle)' }}>
-              ⏳ {formatEta(etaSeconds)}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-text-muted)' }}>
+              <Clock size={12} strokeWidth={1.75} />
+              <span>{formatEta(etaSeconds)}</span>
             </span>
           )}
           {speed > 0 && (
             <span
               style={{
-                color: 'var(--color-lime)',
-                fontWeight: 700,
-                background: 'rgba(228, 253, 151, 0.12)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                color: '#22d3ee',
+                fontWeight: 600,
+                background: 'rgba(34, 211, 238, 0.1)',
                 padding: '2px 8px',
-                borderRadius: 'var(--radius-full)',
-                border: '1px solid rgba(228, 253, 151, 0.25)'
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(34, 211, 238, 0.2)'
               }}
             >
-              ⚡ {formatSpeed(speed)}
+              <Zap size={12} strokeWidth={1.75} />
+              <span>{formatSpeed(speed)}</span>
             </span>
           )}
         </div>

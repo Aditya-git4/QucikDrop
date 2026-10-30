@@ -82,6 +82,29 @@ export class FileTransferManager {
     this.onScRoomError = (err) => {
       if (err?.code === 'PEER_UNAVAILABLE') {
         this.handleTransportDisconnect('websocket', 'Transfer interrupted');
+      } else if (err?.code === 'PEER_SLOW') {
+        // When server drops a binary frame due to PEER_SLOW, fail the active relay transfer
+        // immediately as "Transfer interrupted" with Retry rather than letting file continue with a hole.
+        for (const sendRecord of Array.from(this.activeSends.values())) {
+          if (sendRecord.transport === 'websocket') {
+            const errorMsg = 'Transfer interrupted';
+            const tid = sendRecord.transferId;
+            const sId = sendRecord.streamId;
+            this.cancelTransfer(tid, 'TRANSFER_INTERRUPTED');
+            this.emit('transferError', {
+              transferId: tid,
+              streamId: sId,
+              fileName: sendRecord.file?.name || 'File',
+              code: 'TRANSFER_INTERRUPTED',
+              error: errorMsg,
+              message: errorMsg,
+              direction: 'send',
+              retryable: true
+            });
+          }
+        }
+      } else if (err?.code === 'RELAY_LIMIT_REACHED') {
+        this.handleRelayLimitReached();
       }
     };
 
@@ -195,6 +218,15 @@ export class FileTransferManager {
         if (sendRecord.timeoutTimer) {
           clearTimeout(sendRecord.timeoutTimer);
           sendRecord.timeoutTimer = null;
+        }
+        if (sendRecord.ackWaitTimer) {
+          clearTimeout(sendRecord.ackWaitTimer);
+          sendRecord.ackWaitTimer = null;
+        }
+        if (typeof sendRecord.resolveAckWait === 'function') {
+          const resolve = sendRecord.resolveAckWait;
+          sendRecord.resolveAckWait = null;
+          resolve();
         }
         this.activeSends.delete(transferId);
         this.emit('transferError', {
@@ -410,8 +442,105 @@ export class FileTransferManager {
         this.finalizeReceive(msg.transferId, msg.fileHash, msg.streamId);
         break;
 
+      case 'file:ack':
+        this.handleFileAck(msg);
+        break;
+
       default:
         break;
+    }
+  }
+
+  /**
+   * Handle incoming file:ack from receiver on WebSocket relay.
+   * Updates acknowledged bytes, clears PEER_SLOW pause, and wakes any waiting sender loop.
+   * @param {object} msg
+   */
+  handleFileAck(msg) {
+    if (!msg) return;
+    const { transferId, streamId, bytesReceived } = msg;
+    const sendRecord = this.activeSends.get(transferId) ||
+      Array.from(this.activeSends.values()).find((s) => s.streamId === streamId);
+    if (!sendRecord) return;
+
+    const acked = Number(bytesReceived) || 0;
+    if (acked > (sendRecord.ackedBytes || 0)) {
+      sendRecord.ackedBytes = acked;
+    }
+
+    // Resume on next ack if paused by PEER_SLOW
+    sendRecord.isPeerSlowPaused = false;
+
+    // Reset ack wait timeout
+    if (sendRecord.ackWaitTimer) {
+      clearTimeout(sendRecord.ackWaitTimer);
+      sendRecord.ackWaitTimer = null;
+    }
+
+    if (typeof sendRecord.resolveAckWait === 'function') {
+      const resolve = sendRecord.resolveAckWait;
+      sendRecord.resolveAckWait = null;
+      resolve();
+    }
+  }
+
+  /**
+   * Handle RELAY_LIMIT_REACHED error from server.
+   * Cancels active WebSocket transfers and emits clear error with user-facing message.
+   */
+  handleRelayLimitReached() {
+    const errorMsg = 'Relay limit reached. Try a direct connection or try again later.';
+
+    for (const [transferId, sendRecord] of this.activeSends.entries()) {
+      if (sendRecord.transport === 'websocket') {
+        sendRecord.isCancelled = true;
+        if (sendRecord.timeoutTimer) {
+          clearTimeout(sendRecord.timeoutTimer);
+          sendRecord.timeoutTimer = null;
+        }
+        if (sendRecord.ackWaitTimer) {
+          clearTimeout(sendRecord.ackWaitTimer);
+          sendRecord.ackWaitTimer = null;
+        }
+        if (typeof sendRecord.resolveAckWait === 'function') {
+          const resolve = sendRecord.resolveAckWait;
+          sendRecord.resolveAckWait = null;
+          resolve();
+        }
+        this.activeSends.delete(transferId);
+        this.sendCancelOnBothTransports({
+          type: 'file:cancel',
+          transferId,
+          streamId: sendRecord.streamId,
+          reason: 'RELAY_LIMIT_REACHED'
+        });
+        this.emit('transferError', {
+          transferId,
+          streamId: sendRecord.streamId,
+          fileName: sendRecord.file?.name,
+          code: 'RELAY_LIMIT_REACHED',
+          error: 'Relay limit reached',
+          message: errorMsg,
+          direction: 'send'
+        });
+      }
+    }
+
+    for (const [streamId, receiveRecord] of this.activeReceives.entries()) {
+      if (receiveRecord.transport === 'websocket') {
+        const receiveTransferId = receiveRecord.transferId;
+        const fileName = receiveRecord.fileName;
+        this.cleanupStream(streamId);
+        this.emit('transferError', {
+          transferId: receiveTransferId,
+          streamId,
+          fileName,
+          code: 'RELAY_LIMIT_REACHED',
+          error: 'Relay limit reached',
+          message: errorMsg,
+          direction: 'receive'
+        });
+      }
     }
   }
 
@@ -459,7 +588,12 @@ export class FileTransferManager {
       startTime: Date.now(),
       hasher,
       transport: chosenTransport,
-      timeoutTimer: null
+      timeoutTimer: null,
+      sentBytes: 0,
+      ackedBytes: 0,
+      isPeerSlowPaused: false,
+      ackWaitTimer: null,
+      resolveAckWait: null
     };
     this.activeSends.set(transferId, sendRecord);
 
@@ -520,6 +654,9 @@ export class FileTransferManager {
           const otherTransport = chosenTransport === 'webrtc-dc' ? 'websocket' : 'webrtc-dc';
           chosenTransport = otherTransport;
           sendRecord.transport = otherTransport;
+          sendRecord.sentBytes = 0;
+          sendRecord.ackedBytes = 0;
+          sendRecord.isPeerSlowPaused = false;
 
           const retryChunkSize = chosenTransport === 'webrtc-dc' ? dcPayloadSize : RELAY_CHUNK_SIZE;
           negotiatedChunkSize = retryChunkSize;
@@ -609,7 +746,57 @@ export class FileTransferManager {
           view.setUint32(4, chunkIndex, false);
           framed.set(new Uint8Array(payloadSlice), 8);
 
+          // ACK CREDITS (WebSocket relay transport only):
+          // Sender keeps at most 1 MiB "in flight" on WebSocket (sentBytes - ackedBytes).
+          // Pauses sending until an ack frees room, or if server sent PEER_SLOW.
+          // If no ack arrives for 20 s while waiting, fail as "Transfer interrupted" with Retry button,
+          // and send file:cancel on both transports.
+          if (chosenTransport === 'websocket') {
+            const WS_MAX_IN_FLIGHT = 1024 * 1024; // 1 MiB window
+            while (
+              ((sendRecord.sentBytes - (sendRecord.ackedBytes || 0) >= WS_MAX_IN_FLIGHT) || sendRecord.isPeerSlowPaused) &&
+              !sendRecord.isCancelled
+            ) {
+              const nowWait = Date.now();
+              const elapsedWait = Math.max(0.001, (nowWait - startTime) / 1000);
+              this.emit('progress', {
+                transferId,
+                streamId,
+                bytesTransferred: fileOffset,
+                totalBytes: file.size,
+                percent: Math.min(99, Math.round((fileOffset / file.size) * 100)),
+                speed: fileOffset / elapsedWait,
+                direction: 'send',
+                isWaitingForAck: true,
+                statusText: 'Slow receiver, waiting...'
+              });
+
+              await new Promise((resolveWait, rejectWait) => {
+                sendRecord.resolveAckWait = resolveWait;
+                if (!sendRecord.ackWaitTimer) {
+                  sendRecord.ackWaitTimer = setTimeout(() => {
+                    sendRecord.resolveAckWait = null;
+                    const err = new Error('Transfer interrupted');
+                    err.code = 'TRANSFER_INTERRUPTED';
+                    rejectWait(err);
+                  }, this.ackTimeoutMs || 20000);
+                }
+              });
+            }
+
+            if (sendRecord.ackWaitTimer) {
+              clearTimeout(sendRecord.ackWaitTimer);
+              sendRecord.ackWaitTimer = null;
+            }
+          }
+
+          if (!sendRecord || sendRecord.isCancelled) {
+            this.activeSends.delete(transferId);
+            return transferId;
+          }
+
           this.sendFileChunkOnTransport(framed.buffer, chosenTransport);
+          sendRecord.sentBytes += currentChunkSize;
 
           blockOffset += currentChunkSize;
           fileOffset += currentChunkSize;
@@ -630,13 +817,16 @@ export class FileTransferManager {
               totalBytes: file.size,
               percent,
               speed,
-              direction: 'send'
+              direction: 'send',
+              isWaitingForAck: false,
+              statusText: null
             });
           }
 
-          // Backpressure: only pause when bufferedAmount reaches high water mark (4 MiB)
-          if (this.shouldPauseForBackpressure(chosenTransport)) {
-            await this.waitForBufferedAmountLowOnTransport(chosenTransport);
+          // Backpressure for webrtc-dc:
+          // Keep the existing 4 MiB DataChannel behaviour unchanged.
+          if (chosenTransport === 'webrtc-dc' && this.shouldPauseForBackpressure('webrtc-dc')) {
+            await this.waitForBufferedAmountLowOnTransport('webrtc-dc');
           }
         }
       }
@@ -674,6 +864,10 @@ export class FileTransferManager {
 
       return transferId;
     } catch (err) {
+      if (sendRecord?.ackWaitTimer) {
+        clearTimeout(sendRecord.ackWaitTimer);
+        sendRecord.ackWaitTimer = null;
+      }
       this.activeSends.delete(transferId);
       // ALWAYS clean up: send file:cancel on BOTH transports
       this.sendCancelOnBothTransports({
@@ -683,15 +877,28 @@ export class FileTransferManager {
         reason: err.message || 'SEND_FAILED'
       });
 
+      const isInterrupted = err.code === 'TRANSFER_INTERRUPTED' || err.message === 'Transfer interrupted';
+      const isRelayLimit = err.code === 'RELAY_LIMIT_REACHED' || err.message === 'Relay limit reached';
+
       this.emit('transferError', {
         transferId,
         streamId,
         fileName: safeName,
-        code: 'SEND_FAILED',
-        message: err.message || 'File transmission failed'
+        code: isRelayLimit ? 'RELAY_LIMIT_REACHED' : isInterrupted ? 'TRANSFER_INTERRUPTED' : 'SEND_FAILED',
+        error: isRelayLimit ? 'Relay limit reached' : isInterrupted ? 'Transfer interrupted' : err.message,
+        message: isRelayLimit
+          ? 'Relay limit reached. Try a direct connection or try again later.'
+          : isInterrupted
+          ? 'Transfer interrupted'
+          : (err.message || 'File transmission failed'),
+        direction: 'send'
       });
       throw err;
     } finally {
+      if (sendRecord?.ackWaitTimer) {
+        clearTimeout(sendRecord.ackWaitTimer);
+        sendRecord.ackWaitTimer = null;
+      }
       this.isSending = false;
     }
   }
@@ -793,6 +1000,7 @@ export class FileTransferManager {
       totalChunks: Number(totalChunks),
       chunkSize: agreedChunkSize,
       receivedBytes: 0,
+      lastAckedBytes: 0,
       receivedChunkIndices: new Set(),
       chunks: [],
       blobParts: [],
@@ -881,6 +1089,36 @@ export class FileTransferManager {
     if (receiveRecord.receivedChunkIndices.has(chunkIndex)) {
       return;
     }
+
+    // Sequence gap detection: chunks are transmitted sequentially from index 0.
+    // If a chunk is skipped, a frame was dropped in transit (e.g. PEER_SLOW or relay limits).
+    // Abort receive immediately with "Transfer interrupted" rather than letting the file continue with a hole.
+    if (chunkIndex > receiveRecord.receivedChunkIndices.size) {
+      const errorMsg = 'Transfer interrupted';
+      const tid = receiveRecord.transferId;
+      const fname = receiveRecord.fileName;
+      this.cleanupStream(streamId);
+
+      this.sendCancelOnBothTransports({
+        type: 'file:cancel',
+        transferId: tid,
+        streamId,
+        reason: 'TRANSFER_INTERRUPTED'
+      });
+
+      this.emit('transferError', {
+        transferId: tid,
+        streamId,
+        fileName: fname,
+        code: 'TRANSFER_INTERRUPTED',
+        error: errorMsg,
+        message: errorMsg,
+        direction: 'receive',
+        retryable: true
+      });
+      return;
+    }
+
     receiveRecord.receivedChunkIndices.add(chunkIndex);
 
     // Reset 20-second inactivity timer on valid chunk
@@ -894,6 +1132,25 @@ export class FileTransferManager {
 
     receiveRecord.chunks.push(payload);
     receiveRecord.receivedBytes += payload.byteLength;
+
+    // ACK CREDITS (WebSocket relay transport only):
+    // The receiver sends file:ack { transferId, streamId, bytesReceived } back on the SAME transport
+    // after every 256 KiB received and once at the end.
+    if (receiveRecord.transport === 'websocket') {
+      const ACK_INTERVAL = 256 * 1024; // 256 KiB
+      if (
+        receiveRecord.receivedBytes - (receiveRecord.lastAckedBytes || 0) >= ACK_INTERVAL ||
+        (receiveRecord.receivedBytes >= receiveRecord.fileSize && (receiveRecord.lastAckedBytes || 0) < receiveRecord.receivedBytes)
+      ) {
+        receiveRecord.lastAckedBytes = receiveRecord.receivedBytes;
+        this.sendControlOnTransport({
+          type: 'file:ack',
+          transferId: receiveRecord.transferId,
+          streamId: receiveRecord.streamId,
+          bytesReceived: receiveRecord.receivedBytes
+        }, 'websocket');
+      }
+    }
 
     // EARLY ERROR: if receivedBytes exceeds fileSize, stop immediately with a clear error
     if (receiveRecord.receivedBytes > receiveRecord.fileSize) {
@@ -1034,8 +1291,12 @@ export class FileTransferManager {
       this.emit('transferError', {
         transferId,
         streamId,
-        code: 'BYTE_COUNT_MISMATCH',
-        message: `Received ${receivedBytes} bytes, expected ${fileSize} bytes.`
+        fileName,
+        code: 'TRANSFER_INTERRUPTED',
+        message: 'Transfer interrupted',
+        error: `Received ${receivedBytes} bytes, expected ${fileSize} bytes.`,
+        direction: 'receive',
+        retryable: true
       });
       this.cleanupStream(streamId);
       return;
@@ -1047,8 +1308,12 @@ export class FileTransferManager {
       this.emit('transferError', {
         transferId,
         streamId,
+        fileName,
         code: 'INTEGRITY_MISMATCH',
-        message: `Cryptographic SHA-256 verification failed (expected: ${expectedFileHash.slice(0, 8)}..., actual: ${actualHash.slice(0, 8)}...).`
+        message: 'Transfer interrupted',
+        error: `Cryptographic SHA-256 verification failed (expected: ${expectedFileHash.slice(0, 8)}..., actual: ${actualHash.slice(0, 8)}...).`,
+        direction: 'receive',
+        retryable: true
       });
       this.cleanupStream(streamId);
       return;
@@ -1060,6 +1325,17 @@ export class FileTransferManager {
     }
     const finalBlob = new Blob(blobParts, { type: mimeType });
     const downloadUrl = typeof URL !== 'undefined' && URL.createObjectURL ? URL.createObjectURL(finalBlob) : null;
+
+    // Final ACK credit on completion
+    if (receiveRecord.transport === 'websocket' && (receiveRecord.lastAckedBytes || 0) < receiveRecord.receivedBytes) {
+      receiveRecord.lastAckedBytes = receiveRecord.receivedBytes;
+      this.sendControlOnTransport({
+        type: 'file:ack',
+        transferId: receiveRecord.transferId,
+        streamId: receiveRecord.streamId,
+        bytesReceived: receiveRecord.receivedBytes
+      }, 'websocket');
+    }
 
     // 4. Clean up stream from active receives
     this.cleanupStream(streamId);

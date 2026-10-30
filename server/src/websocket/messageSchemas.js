@@ -15,7 +15,13 @@ export const ErrorCodes = {
   RATE_LIMITED: 'RATE_LIMITED',
   ROOM_CAPACITY_EXCEEDED: 'ROOM_CAPACITY_EXCEEDED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
-  PEER_UNAVAILABLE: 'PEER_UNAVAILABLE'
+  PEER_UNAVAILABLE: 'PEER_UNAVAILABLE',
+  PEER_SLOW: 'PEER_SLOW',
+  RELAY_LIMIT_REACHED: 'RELAY_LIMIT_REACHED',
+  PIN_REQUIRED: 'PIN_REQUIRED',
+  INVALID_PIN: 'INVALID_PIN',
+  JOIN_DENIED: 'JOIN_DENIED',
+  TOO_MANY_ATTEMPTS: 'TOO_MANY_ATTEMPTS'
 };
 
 /**
@@ -95,6 +101,15 @@ export function validateCreateRoom(msg) {
   if (msg.deviceName !== undefined && typeof msg.deviceName !== 'string') {
     return 'deviceName must be a string';
   }
+  if (msg.requirePin !== undefined && typeof msg.requirePin !== 'boolean') {
+    return 'requirePin must be a boolean';
+  }
+  if (msg.pin !== undefined && (typeof msg.pin !== 'string' || !/^\d{4}$/.test(msg.pin.trim()))) {
+    return 'pin must be a 4-digit string';
+  }
+  if (msg.autoApprove !== undefined && typeof msg.autoApprove !== 'boolean') {
+    return 'autoApprove must be a boolean';
+  }
   return null;
 }
 
@@ -112,6 +127,48 @@ export function validateJoinRoom(msg) {
   }
   if (msg.deviceName !== undefined && typeof msg.deviceName !== 'string') {
     return 'deviceName must be a string';
+  }
+  if (msg.pin !== undefined && typeof msg.pin !== 'string') {
+    return 'pin must be a string';
+  }
+  return null;
+}
+
+/**
+ * Validate peer:join-approve message schema.
+ * @param {any} msg
+ * @returns {string | null}
+ */
+export function validateJoinApprove(msg) {
+  if (typeof msg.requestId !== 'string' || !msg.requestId || msg.requestId.length > 64) {
+    return 'requestId must be a non-empty string (max 64 chars)';
+  }
+  if (msg.autoApprove !== undefined && typeof msg.autoApprove !== 'boolean') {
+    return 'autoApprove must be a boolean';
+  }
+  return null;
+}
+
+/**
+ * Validate peer:join-deny message schema.
+ * @param {any} msg
+ * @returns {string | null}
+ */
+export function validateJoinDeny(msg) {
+  if (typeof msg.requestId !== 'string' || !msg.requestId || msg.requestId.length > 64) {
+    return 'requestId must be a non-empty string (max 64 chars)';
+  }
+  return null;
+}
+
+/**
+ * Validate room:cancel-join message schema.
+ * @param {any} msg
+ * @returns {string | null}
+ */
+export function validateCancelJoin(msg) {
+  if (typeof msg.requestId !== 'string' || !msg.requestId || msg.requestId.length > 64) {
+    return 'requestId must be a non-empty string (max 64 chars)';
   }
   return null;
 }

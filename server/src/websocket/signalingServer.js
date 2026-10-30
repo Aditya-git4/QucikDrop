@@ -1,17 +1,12 @@
 import { WebSocketServer } from 'ws';
 import { config } from '../config/config.js';
 import { isOriginAllowed } from '../security/originValidation.js';
+import { getClientIp, maskIp } from '../security/ipUtils.js';
+import { sanitizeUserAgent } from '../security/tokenUtils.js';
 import { handleIncomingMessage, sendJson } from './messageHandler.js';
 
-/**
- * Extract client IP from upgrade request, taking into account trusted headers only when needed.
- * @param {import('http').IncomingMessage} req
- * @returns {string}
- */
-export function getClientIp(req) {
-  // Use remoteAddress as standard
-  return req.socket?.remoteAddress || '127.0.0.1';
-}
+// Re-export getClientIp for backward compatibility
+export { getClientIp };
 
 /**
  * Initialize WebSocket signaling server attached to an HTTP server.
@@ -59,14 +54,29 @@ export function createSignalingServer(httpServer, roomManager) {
 
   wss.on('connection', (ws, req) => {
     ws.isAlive = true;
+    ws.userAgent = req.headers['user-agent'] || '';
     const clientIp = getClientIp(req);
+    ws.clientIp = clientIp;
+
+    // Diagnostic connection log with masked IP
+    const masked = maskIp(clientIp);
+    const uaSummary = sanitizeUserAgent(ws.userAgent);
+    console.log(`[WS-CONN] clientIp=${masked} userAgent="${uaSummary}"`);
 
     ws.on('pong', () => {
       ws.isAlive = true;
     });
 
+    // Enforce strict FIFO message processing per socket using a promise queue.
+    // Rapidly arriving messages on the same socket will execute sequentially,
+    // preventing async race conditions.
+    ws._msgQueue = Promise.resolve();
     ws.on('message', (rawData, isBinary) => {
-      handleIncomingMessage(roomManager, ws, rawData, isBinary, clientIp);
+      ws._msgQueue = ws._msgQueue
+        .then(() => handleIncomingMessage(roomManager, ws, rawData, isBinary, clientIp))
+        .catch((err) => {
+          console.error('Error in websocket message pipeline:', err.message);
+        });
     });
 
     ws.on('close', () => {
@@ -77,6 +87,12 @@ export function createSignalingServer(httpServer, roomManager) {
           type: 'peer:disconnected',
           version: 1,
           peerId: result.disconnectedPeerId
+        });
+      } else if (result && result.status === 'pending_canceled' && result.ownerWs) {
+        sendJson(result.ownerWs, {
+          type: 'peer:join-canceled',
+          version: 1,
+          requestId: result.requestId
         });
       }
     });

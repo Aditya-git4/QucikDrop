@@ -1,13 +1,16 @@
 import React, { useState, useRef } from 'react';
 import { extractFilesFromDataTransfer } from '../utils/fileUtils.js';
 import { hapticTap } from '../utils/soundEffects.js';
+import { UploadCloud, FolderUp, Camera, Clipboard, FileText } from 'lucide-react';
 
 /**
- * Modern VisionOS / iOS glassmorphic drag-and-drop file selection zone.
- * Supports single files, multi-file drops, recursive folders, and mobile camera quick-shoot.
+ * Modern drag-and-drop file selection zone with support for multi-file, folders, and camera.
+ * Zero emojis, clean styling.
  * @param {{
  *   onFilesSelected: (files: FileList | File[]) => void,
  *   onPasteClipboard?: (() => void) | null,
+ *   isP2PConnected?: boolean,
+ *   isConnected?: boolean,
  *   disabled?: boolean
  * }} props
  */
@@ -50,7 +53,7 @@ export function FileDropZone({
     if (e.target.files && e.target.files.length > 0) {
       hapticTap();
       onFilesSelected(e.target.files);
-      e.target.value = ''; // Reset input so same file can be selected again
+      e.target.value = '';
     }
   };
 
@@ -62,32 +65,28 @@ export function FileDropZone({
       onClick={() => {
         if (!disabled) fileInputRef.current?.click();
       }}
+      className={`file-drop-zone ${isDragOver ? 'is-drag-over' : ''}`}
       style={{
         border: `2px dashed ${
-          isDragOver ? 'var(--color-lime)' : 'rgba(228, 253, 151, 0.24)'
+          isDragOver ? '#6366f1' : 'var(--border-medium)'
         }`,
         borderRadius: 'var(--radius-lg)',
-        padding: '24px 18px',
+        padding: '36px 20px',
         textAlign: 'center',
-        background: isDragOver
-          ? 'rgba(228, 253, 151, 0.15)'
-          : 'var(--glass-surface-2)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
+        background: isDragOver ? 'rgba(99, 102, 241, 0.08)' : 'var(--color-bg-surface-1)',
+        boxShadow: isDragOver ? '0 0 24px rgba(99, 102, 241, 0.2)' : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer',
-        boxShadow: isDragOver ? 'var(--glass-shadow-glow)' : 'var(--glass-shadow-sm)',
-        transition: 'all 0.25s var(--spring-bounce)',
-        transform: isDragOver ? 'scale(1.015)' : 'scale(1)',
+        transition: 'all var(--duration-normal) var(--ease-apple)',
+        transform: isDragOver ? 'scale(1.01)' : 'scale(1)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '12px',
-        opacity: disabled ? 0.6 : 1,
+        gap: '14px',
+        opacity: disabled ? 0.5 : 1,
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        flex: '1 1 auto',
-        minHeight: '200px'
+        minHeight: '220px'
       }}
       role="button"
       tabIndex={disabled ? -1 : 0}
@@ -129,52 +128,39 @@ export function FileDropZone({
           width: '56px',
           height: '56px',
           borderRadius: 'var(--radius-md)',
-          background: isDragOver ? 'var(--color-lime)' : 'var(--color-lime-dim)',
-          color: isDragOver ? 'var(--color-lime-text)' : 'var(--color-lime)',
-          border: '1px solid rgba(228, 253, 151, 0.3)',
-          boxShadow: isDragOver ? '0 0 24px rgba(228, 253, 151, 0.6)' : 'none',
+          background: isDragOver ? 'var(--accent-gradient)' : 'var(--color-bg-surface-2)',
+          color: isDragOver ? '#ffffff' : '#6366f1',
+          border: '1px solid var(--border-subtle)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '1.75rem',
-          transition: 'all 0.2s var(--spring-snappy)'
+          transition: 'all var(--duration-normal) ease'
         }}
       >
-        {isDragOver ? '📥' : '📁'}
+        <UploadCloud size={28} strokeWidth={1.75} />
       </div>
 
       <div>
-        <p style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--color-text-main)', marginBottom: '4px' }}>
+        <p
+          style={{
+            fontWeight: 600,
+            fontSize: 'var(--font-size-base)',
+            color: 'var(--color-text-primary)',
+            marginBottom: '4px'
+          }}
+        >
           {disabled
             ? 'Room Terminated'
             : isDragOver
-            ? 'Release to Send Files & Folders'
-            : 'Drop Files or Click to Browse / Snap'}
+            ? 'Release to send files'
+            : 'Drop files here or click to browse'}
         </p>
-        <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', marginBottom: !isP2PConnected ? '6px' : '0' }}>
-          Direct peer-to-peer streaming • Drop whole folders, photos, or documents
+        <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', margin: 0 }}>
+          Files stream directly between devices • Never stored on a server
         </p>
-        {!isP2PConnected && !disabled && (
-          <span
-            style={{
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              padding: '2px 10px',
-              borderRadius: 'var(--radius-full)',
-              background: 'rgba(228, 253, 151, 0.1)',
-              color: 'var(--color-lime)',
-              border: '1px solid rgba(228, 253, 151, 0.25)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px'
-            }}
-          >
-            <span>⚡</span> {isConnected ? 'Ready — files beam instantly across devices' : 'Waiting for peer to connect...'}
-          </span>
-        )}
       </div>
 
-      {/* Action Buttons: ALWAYS rendered and accessible */}
+      {/* Action Buttons */}
       <div
         style={{
           display: 'flex',
@@ -190,8 +176,9 @@ export function FileDropZone({
           className="btn btn-primary"
           style={{
             padding: '6px 14px',
-            fontSize: '0.82rem',
-            minHeight: '34px'
+            fontSize: 'var(--font-size-xs)',
+            minHeight: '36px',
+            height: '36px'
           }}
           disabled={disabled}
           onClick={() => {
@@ -199,15 +186,18 @@ export function FileDropZone({
             fileInputRef.current?.click();
           }}
         >
-          Browse Files
+          <FileText size={14} strokeWidth={1.75} />
+          <span>Browse Files</span>
         </button>
+
         <button
           type="button"
           className="btn btn-secondary"
           style={{
             padding: '6px 14px',
-            fontSize: '0.82rem',
-            minHeight: '34px'
+            fontSize: 'var(--font-size-xs)',
+            minHeight: '36px',
+            height: '36px'
           }}
           disabled={disabled}
           onClick={() => {
@@ -215,15 +205,18 @@ export function FileDropZone({
             folderInputRef.current?.click();
           }}
         >
-          📁 Folder
+          <FolderUp size={14} strokeWidth={1.75} />
+          <span>Folder</span>
         </button>
+
         <button
           type="button"
           className="btn btn-secondary"
           style={{
             padding: '6px 14px',
-            fontSize: '0.82rem',
-            minHeight: '34px'
+            fontSize: 'var(--font-size-xs)',
+            minHeight: '36px',
+            height: '36px'
           }}
           disabled={disabled}
           onClick={() => {
@@ -232,18 +225,19 @@ export function FileDropZone({
           }}
           title="Snap a photo directly with your camera"
         >
-          📷 Camera
+          <Camera size={14} strokeWidth={1.75} />
+          <span>Camera</span>
         </button>
+
         {onPasteClipboard && (
           <button
             type="button"
             className="btn btn-secondary"
             style={{
               padding: '6px 14px',
-              fontSize: '0.82rem',
-              minHeight: '34px',
-              borderColor: 'rgba(228, 253, 151, 0.35)',
-              color: 'var(--color-lime)'
+              fontSize: 'var(--font-size-xs)',
+              minHeight: '36px',
+              height: '36px'
             }}
             disabled={disabled}
             onClick={() => {
@@ -252,7 +246,8 @@ export function FileDropZone({
             }}
             title="Paste image, files, or text from device clipboard"
           >
-            📋 Paste
+            <Clipboard size={14} strokeWidth={1.75} />
+            <span>Paste</span>
           </button>
         )}
       </div>

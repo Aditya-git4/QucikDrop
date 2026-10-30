@@ -35,6 +35,10 @@ export function useWebRTC({
   const peerDeviceNameRef = useRef(peerDeviceName);
   const myDeviceNameRef = useRef(myDeviceName);
 
+  const disconnectTimerRef = useRef(null);
+  const iceRestartAttemptedRef = useRef(false);
+  const isRestartingIceRef = useRef(false);
+
   useEffect(() => {
     isOwnerRef.current = isOwner;
   }, [isOwner]);
@@ -116,9 +120,39 @@ export function useWebRTC({
       }
     };
 
+    const attemptIceRestart = async () => {
+      if (!isOwnerRef.current || iceRestartAttemptedRef.current || isRestartingIceRef.current) {
+        return;
+      }
+      iceRestartAttemptedRef.current = true;
+      isRestartingIceRef.current = true;
+      debugLogger.logStateChange('WEBRTC', 'ice_restart_initiated', { reason: 'failed_or_disconnected_8s' }, pcManager);
+
+      try {
+        setWebrtcStatus('connecting');
+        const offer = await pcManager.createOffer({ iceRestart: true });
+        signalingClient.send({
+          type: 'rtc:offer',
+          version: 1,
+          payload: offer
+        });
+      } catch (err) {
+        console.warn('ICE restart attempt failed:', err);
+        setConnectionType('relay');
+        setIsP2PConnected(false);
+      } finally {
+        isRestartingIceRef.current = false;
+      }
+    };
+
     // 2. Peer connection status change
     const handleStatusChange = (status) => {
       if (status === 'connected') {
+        if (disconnectTimerRef.current) {
+          clearTimeout(disconnectTimerRef.current);
+          disconnectTimerRef.current = null;
+        }
+        iceRestartAttemptedRef.current = false;
         setWebrtcStatus('connected');
         if (
           pcManager.isP2PHealthy &&
@@ -128,8 +162,43 @@ export function useWebRTC({
         ) {
           setIsP2PConnected(true);
         }
-      } else if (['failed', 'disconnected', 'closed'].includes(status)) {
-        setWebrtcStatus(status);
+      } else if (status === 'failed') {
+        if (disconnectTimerRef.current) {
+          clearTimeout(disconnectTimerRef.current);
+          disconnectTimerRef.current = null;
+        }
+        setWebrtcStatus('failed');
+        setIsP2PConnected(false);
+
+        // Attempt ICE restart from owner once before falling back to relay
+        if (isOwnerRef.current && !iceRestartAttemptedRef.current) {
+          attemptIceRestart();
+        } else {
+          setConnectionType('relay');
+          setConnectionStats(null);
+        }
+      } else if (status === 'disconnected') {
+        setWebrtcStatus('disconnected');
+        setIsP2PConnected(false);
+
+        // Wait 8s before triggering ICE restart / falling back to relay
+        if (!disconnectTimerRef.current) {
+          disconnectTimerRef.current = setTimeout(() => {
+            disconnectTimerRef.current = null;
+            if (isOwnerRef.current && !iceRestartAttemptedRef.current) {
+              attemptIceRestart();
+            } else {
+              setConnectionType('relay');
+              setConnectionStats(null);
+            }
+          }, 8000);
+        }
+      } else if (status === 'closed') {
+        if (disconnectTimerRef.current) {
+          clearTimeout(disconnectTimerRef.current);
+          disconnectTimerRef.current = null;
+        }
+        setWebrtcStatus('closed');
         setIsP2PConnected(false);
         setConnectionType('relay');
         setConnectionStats(null);
@@ -339,6 +408,10 @@ export function useWebRTC({
       signalingClient.off('rtc:ice-candidate', handleRemoteIceCandidate);
       signalingClient.off('textMessage', handleSignalingTextMessage);
 
+      if (disconnectTimerRef.current) {
+        clearTimeout(disconnectTimerRef.current);
+        disconnectTimerRef.current = null;
+      }
       pcManager.close();
       setIsP2PConnected(false);
       setWebrtcStatus('disconnected');

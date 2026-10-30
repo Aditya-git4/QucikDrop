@@ -1,11 +1,23 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/500.css';
 import App, { ErrorBoundary } from './App.jsx';
 import './index.css';
 
-// Log Vite chunk preload error if any
+// Handle Vite chunk preload errors (e.g. after a redeploy when old hashes 404)
 window.addEventListener('vite:preloadError', (event) => {
-  console.warn('Vite preload error:', event);
+  console.warn('Vite preload error, refreshing for latest bundle:', event);
+  const reloadKey = 'quickdrop:chunk_reload';
+  const lastReload = sessionStorage.getItem(reloadKey);
+  const now = Date.now();
+  if (!lastReload || now - Number(lastReload) > 10000) {
+    sessionStorage.setItem(reloadKey, String(now));
+    window.location.reload();
+  }
 });
 
 const rootElement = document.getElementById('root');

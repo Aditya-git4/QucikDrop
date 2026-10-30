@@ -5,7 +5,8 @@ import {
   getIceServers,
   parseUrls,
   generateEphemeralCredentials,
-  DEFAULT_STUN_SERVERS
+  DEFAULT_STUN_SERVERS,
+  CloudflareTurnManager
 } from '../../src/config/iceServers.js';
 
 describe('ICE & TURN Server Configuration', () => {
@@ -122,5 +123,153 @@ describe('ICE & TURN Server Configuration', () => {
     assert.deepEqual(turnServer.urls, ['turn:static.metered.ca:80']);
     assert.equal(turnServer.username, 'static-user');
     assert.equal(turnServer.credential, 'static-password');
+  });
+
+  it('CloudflareTurnManager: falls back to STUN when env is missing and logs one startup warning', () => {
+    const logs = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => logs.push(args.join(' '));
+
+    try {
+      const manager = new CloudflareTurnManager({ keyId: '', apiToken: '' });
+      assert.equal(manager.getHealthStatus(), 'not_configured');
+
+      // Second check should not duplicate the startup warning
+      manager.logStartupWarning();
+      const warningCount = logs.filter((l) => l.includes('Cloudflare Realtime TURN is not configured')).length;
+      assert.equal(warningCount, 1);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it('CloudflareTurnManager: falls back to STUN-only and enters degraded state when API call fails', async () => {
+    const failingFetch = async () => {
+      return {
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        json: async () => ({ error: 'gateway failure' })
+      };
+    };
+
+    const manager = new CloudflareTurnManager({
+      keyId: 'mock-key-id',
+      apiToken: 'mock-api-token',
+      fetchFn: failingFetch,
+      timeoutMs: 100
+    });
+
+    assert.equal(manager.getHealthStatus(), 'configured');
+
+    const result = await manager.fetchCredentials();
+    assert.equal(result, null);
+    assert.equal(manager.getHealthStatus(), 'degraded');
+    assert.ok(manager.backoffMs > 5000, 'Backoff must increase on failure');
+
+    manager.stop();
+  });
+
+  it('CloudflareTurnManager: caches credentials for 45 minutes and merges all URL variants', async () => {
+    let fetchCalls = 0;
+    const mockSuccessFetch = async (url, opts) => {
+      fetchCalls++;
+      // Verify body requests 3600 TTL
+      const body = JSON.parse(opts.body);
+      assert.equal(body.ttl, 3600);
+      assert.equal(opts.headers['Authorization'], 'Bearer cf-valid-token-123');
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          iceServers: [
+            { urls: ['stun:stun.cloudflare.com:3478'] },
+            {
+              urls: [
+                'turn:turn.cloudflare.com:3478?transport=udp',
+                'turn:turn.cloudflare.com:443?transport=udp',
+                'turn:turn.cloudflare.com:3478?transport=tcp',
+                'turn:turn.cloudflare.com:80?transport=tcp',
+                'turns:turn.cloudflare.com:5349?transport=tcp',
+                'turns:turn.cloudflare.com:443?transport=tcp'
+              ],
+              username: 'cf-ephemeral-user-999',
+              credential: 'cf-ephemeral-credential-xyz'
+            }
+          ]
+        })
+      };
+    };
+
+    const manager = new CloudflareTurnManager({
+      keyId: 'cf-turn-key-001',
+      apiToken: 'cf-valid-token-123',
+      fetchFn: mockSuccessFetch,
+      ttlSeconds: 3600,
+      cacheDurationMs: 45 * 60 * 1000
+    });
+
+    // First call fetches credentials
+    const servers1 = await manager.fetchCredentials();
+    assert.ok(Array.isArray(servers1));
+    assert.equal(fetchCalls, 1);
+    assert.equal(manager.getHealthStatus(), 'configured');
+
+    // Verify STUN and TURN entries
+    assert.ok(servers1.some((s) => s.urls.includes('stun:stun.cloudflare.com:3478')));
+    const turnEntry = servers1.find((s) => s.username === 'cf-ephemeral-user-999');
+    assert.ok(turnEntry);
+    assert.equal(turnEntry.credential, 'cf-ephemeral-credential-xyz');
+    assert.equal(turnEntry.urls.length, 6);
+
+    // Second call before expiry reuses cached credentials
+    assert.ok(Date.now() < manager.cacheExpiry);
+    assert.equal(manager.cachedIceServers, servers1);
+
+    manager.stop();
+  });
+
+  it('CloudflareTurnManager: API tokens never appear in server logs or client responses', async () => {
+    const sensitiveApiToken = 'SUPER_SECRET_CLOUDFLARE_API_KEY_998877665544';
+    const logs = [];
+
+    const origWarn = console.warn;
+    const origLog = console.log;
+    const origError = console.error;
+
+    console.warn = (...args) => logs.push(args.join(' '));
+    console.log = (...args) => logs.push(args.join(' '));
+    console.error = (...args) => logs.push(args.join(' '));
+
+    try {
+      const mockFailingFetch = async () => {
+        throw new Error('Connection refused to rtc.live.cloudflare.com');
+      };
+
+      const manager = new CloudflareTurnManager({
+        keyId: 'cf-test-key-id',
+        apiToken: sensitiveApiToken,
+        fetchFn: mockFailingFetch
+      });
+
+      const res = await manager.fetchCredentials();
+      assert.equal(res, null);
+
+      // Scan all logs for the secret token
+      for (const logLine of logs) {
+        assert.ok(
+          !logLine.includes(sensitiveApiToken),
+          `Sensitive API token was leaked in log: "${logLine}"`
+        );
+      }
+
+      manager.stop();
+    } finally {
+      console.warn = origWarn;
+      console.log = origLog;
+      console.error = origError;
+    }
   });
 });

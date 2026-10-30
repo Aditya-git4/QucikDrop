@@ -8,6 +8,14 @@ import { ConnectionBanner } from './components/ConnectionBanner.jsx';
 import { ErrorMessage } from './components/ErrorMessage.jsx';
 import { DebugLog } from './components/DebugLog.jsx';
 import { parseInvitationFromUrl, getRoomSession } from './utils/roomUtils.js';
+import { Radio, Download, Sun, Moon, AlertCircle } from 'lucide-react';
+
+const isDemoMode = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo') === '1';
+
+let DemoRoom = null;
+if (import.meta.env.DEV) {
+  DemoRoom = React.lazy(() => import('./dev/DemoRoom.jsx'));
+}
 
 export class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -27,11 +35,13 @@ export class ErrorBoundary extends React.Component {
     if (this.state.hasError) {
       return (
         <div style={{ padding: '36px 20px', maxWidth: '440px', margin: '40px auto', textAlign: 'center' }} className="card">
-          <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>⚠️</div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+            <AlertCircle size={40} strokeWidth={1.75} color="var(--color-status-relay)" />
+          </div>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: '8px' }}>
             Unable to render room
           </h2>
-          <p style={{ fontSize: '0.88rem', color: 'var(--color-text-muted)', marginBottom: '20px' }}>
+          <p style={{ fontSize: '0.88rem', color: 'var(--color-text-secondary)', marginBottom: '20px' }}>
             {this.state.error?.message || 'An unexpected error occurred.'}
           </p>
           <button
@@ -53,6 +63,31 @@ export class ErrorBoundary extends React.Component {
 export function App() {
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
   const [hasNewVersion, setHasNewVersion] = useState(false);
+
+  // Theme management: defaults to dark, supports light via toggle & prefers-color-scheme
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem('quickdrop:theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+      if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches) {
+        return 'light';
+      }
+    } catch (_) {}
+    return 'dark';
+  });
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', theme);
+      try {
+        localStorage.setItem('quickdrop:theme', theme);
+      } catch (_) {}
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
   const {
     signalingClient,
     connectionStatus,
@@ -65,15 +100,30 @@ export function App() {
     peerDeviceName,
     expiresAt,
     iceServers,
+    roomKey,
     errorMessage,
     errorCode,
+    pendingJoinRequest,
+    isJoinPending,
+    pendingRequestId,
+    requirePin,
+    roomPin,
+    pinRequired,
+    pinError,
+    pinAttemptsRemaining,
+    joinDenied,
     createRoom,
     joinRoom,
     rejoinRoom,
     closeRoom,
     reset,
     startFreshSession,
-    setMyDeviceName
+    setMyDeviceName,
+    approveJoinRequest,
+    denyJoinRequest,
+    cancelJoinRequest,
+    submitPin,
+    retryJoin
   } = useSignaling();
 
   const {
@@ -91,7 +141,8 @@ export function App() {
     roomId,
     myDeviceName,
     peerDeviceName,
-    iceServers
+    iceServers,
+    roomKey
   });
 
   const {
@@ -104,7 +155,9 @@ export function App() {
     resetFileTransfer
   } = useFileTransfer({
     peerConnection,
-    signalingClient
+    signalingClient,
+    roomKey,
+    isOwner
   });
 
   // PWA beforeinstallprompt handler
@@ -154,7 +207,7 @@ export function App() {
     if (hasParsedUrlRef.current) return;
     hasParsedUrlRef.current = true;
 
-    const { roomId: urlRoomId, joinToken: urlJoinToken } = parseInvitationFromUrl();
+    const { roomId: urlRoomId, joinToken: urlJoinToken, roomKey: urlRoomKey } = parseInvitationFromUrl();
     const storedSession = urlRoomId ? getRoomSession(urlRoomId) : null;
 
     if (storedSession && storedSession.roomId === urlRoomId && storedSession.peerSecret) {
@@ -162,7 +215,7 @@ export function App() {
       rejoinRoom(storedSession.roomId, storedSession.peerId, storedSession.peerSecret, storedSession.deviceName);
     } else if (urlRoomId && urlJoinToken) {
       // Auto-join from QR code scan or link click
-      joinRoom(urlRoomId, urlJoinToken);
+      joinRoom(urlRoomId, urlJoinToken, null, urlRoomKey);
     } else if (urlRoomId && !urlJoinToken) {
       // If user refreshed on /room/:id without token and no stored session, normalize address bar cleanly to /
       if (typeof window !== 'undefined' && window.location.pathname !== '/') {
@@ -195,127 +248,132 @@ export function App() {
     handleReset();
   }, [isOwner, signalingClient, handleReset]);
 
-  const handleStartFreshSession = useCallback(async (customName = null) => {
+  const handleStartFreshSession = useCallback(async (customName = null, reqPin = false, pinCode = null) => {
     resetWebRTC();
     resetFileTransfer();
     if (typeof window !== 'undefined' && window.location.pathname !== '/') {
       window.history.pushState(null, '', '/' + window.location.search);
     }
-    await startFreshSession(customName || myDeviceName);
+    await startFreshSession(customName || myDeviceName, reqPin, pinCode);
   }, [resetWebRTC, resetFileTransfer, startFreshSession, myDeviceName]);
 
   const isInRoomView = roomStatus !== 'idle';
+  const isTransferActive = transfers.some((t) => t.status === 'transferring');
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      const inRoom = isInRoomView || isDemoMode;
+      document.documentElement.setAttribute('data-in-room', inRoom ? 'true' : 'false');
+      document.body.setAttribute('data-in-room', inRoom ? 'true' : 'false');
+      document.body.setAttribute('data-transfer-active', isTransferActive ? 'true' : 'false');
+    }
+  }, [isInRoomView, isTransferActive]);
+
+  if (isDemoMode && DemoRoom) {
+    return (
+      <React.Suspense fallback={<div style={{ color: 'var(--color-text-secondary)', padding: '40px', textAlign: 'center' }}>Loading demo...</div>}>
+        <DemoRoom />
+      </React.Suspense>
+    );
+  }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', position: 'relative' }}>
-      {/* Ambient Glassmorphic Refraction Orbs */}
-      <div className="ambient-glow-canvas" aria-hidden="true">
-        <div className="ambient-orb ambient-orb-1" />
-        <div className="ambient-orb ambient-orb-2" />
-        <div className="ambient-orb ambient-orb-3" />
+    <div
+      className={`app-container ${isInRoomView ? 'app-in-room' : ''}`}
+      style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', position: 'relative' }}
+      data-transfer-active={isTransferActive}
+      data-in-room={isInRoomView}
+    >
+      {/* Static Background Spotlight & Hairline Grid */}
+      <div className="bg-canvas" aria-hidden="true">
+        <div className="bg-spotlight" />
+        <div className="bg-hairline-grid" />
       </div>
 
-      {/* Top Application Header */}
-      <header className="app-header">
-        <div className="header-content">
+      {/* Navigation Bar */}
+      <header className="nav-bar">
+        <div className="nav-container">
           <a
             href="/"
             onClick={(e) => {
               e.preventDefault();
               handleReset();
             }}
-            className="brand-link"
+            className="nav-brand"
           >
-            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ color: 'var(--color-lime)', textShadow: '0 0 12px rgba(228, 253, 151, 0.4)' }}>⚡</span>
-              <span>QuickDrop</span>
-            </span>
-            <span className="brand-badge">
-              {connectionStatus === 'disconnected'
-                ? 'Offline'
-                : isP2PConnected
-                ? connectionType === 'lan'
-                  ? 'LAN P2P'
-                  : 'Direct P2P'
-                : connectionStatus === 'connected'
-                ? 'Relay (server)'
-                : 'Connecting...'}
-            </span>
+            <Radio className="nav-logo-icon" size={20} strokeWidth={1.75} />
+            <span>QuickDrop</span>
           </a>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {!isInRoomView && (
+            <nav className="nav-links">
+              <a href="#how-it-works" className="nav-link">How it works</a>
+              <a href="#privacy" className="nav-link">Privacy</a>
+              <a href="#faq" className="nav-link">FAQ</a>
+            </nav>
+          )}
+
+          <div className="nav-actions">
             {deferredInstallPrompt && (
               <button
                 type="button"
                 onClick={handleInstallApp}
                 className="btn btn-secondary"
-                style={{
-                  minHeight: '32px',
-                  padding: '4px 12px',
-                  fontSize: '0.78rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  borderRadius: 'var(--radius-full)'
-                }}
+                style={{ height: '36px', minHeight: '36px', padding: '0 12px', fontSize: '0.8125rem' }}
               >
-                <span>📥</span>
+                <Download size={14} strokeWidth={1.75} />
                 <span>Install</span>
               </button>
             )}
 
-            {/* iOS Dynamic Island Status Pill */}
-            <div className="dynamic-island-pill">
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: isP2PConnected
-                    ? 'var(--color-lime)'
-                    : connectionStatus === 'connected'
-                    ? 'var(--color-warning)'
-                    : 'var(--color-danger)',
-                  boxShadow: isP2PConnected
-                    ? '0 0 10px rgba(228, 253, 151, 0.8)'
-                    : connectionStatus === 'connected'
-                    ? '0 0 8px rgba(250, 204, 21, 0.6)'
-                    : 'none'
-                }}
-              />
-              <span style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--color-text-main)', letterSpacing: '0.01em' }}>
-                {isP2PConnected
-                  ? 'P2P Direct'
-                  : connectionStatus === 'connected'
-                  ? 'Signaling Active'
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="btn-icon"
+              aria-label="Toggle light/dark theme"
+            >
+              {theme === 'dark' ? <Sun size={17} strokeWidth={1.75} /> : <Moon size={17} strokeWidth={1.75} />}
+            </button>
+
+            {/* Small connection dot with tooltip */}
+            <div
+              className="status-indicator-dot"
+              data-status={connectionStatus}
+              data-tooltip={
+                connectionStatus === 'connected'
+                  ? 'Signaling active'
                   : connectionStatus === 'connecting'
                   ? 'Connecting...'
-                  : 'Offline'}
-              </span>
-            </div>
+                  : 'Offline'
+              }
+              aria-label={`Connection status: ${connectionStatus}`}
+            />
           </div>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <main className="main-content">
+      <main style={{ flex: 1, width: '100%', position: 'relative', zIndex: 2 }}>
         <ErrorBoundary>
-          <ConnectionBanner status={connectionStatus} />
+          {/* Banner only appears inside a room session, never scaring users on landing */}
+          {isInRoomView && <ConnectionBanner status={connectionStatus} />}
 
           {/* Global Error Banner */}
           {errorMessage && roomStatus === 'idle' && (
-            <ErrorMessage message={errorMessage} code={errorCode} onDismiss={handleReset} />
+            <div style={{ maxWidth: 'var(--max-width)', margin: '16px auto', padding: '0 24px' }}>
+              <ErrorMessage message={errorMessage} code={errorCode} onDismiss={handleReset} />
+            </div>
           )}
 
           {!isInRoomView ? (
             <Home
-              onCreateRoom={(name) => {
+              onCreateRoom={(name, reqPin, pinCode) => {
                 setMyDeviceName(name);
-                handleStartFreshSession(name);
+                handleStartFreshSession(name, reqPin, pinCode);
               }}
-              onJoinRoom={(targetRoomId, targetToken, name) => {
+              onJoinRoom={(targetRoomId, targetToken, name, key, candidatePin) => {
                 setMyDeviceName(name);
-                joinRoom(targetRoomId, targetToken, name);
+                joinRoom(targetRoomId, targetToken, name, key, candidatePin);
               }}
               isConnecting={connectionStatus === 'connecting'}
               errorMessage={errorMessage}
@@ -324,6 +382,7 @@ export function App() {
             <Room
               roomId={roomId || ''}
               joinToken={joinToken}
+              roomKey={roomKey}
               roomStatus={roomStatus}
               isPeerReconnecting={isPeerReconnecting}
               isOwner={isOwner}
@@ -343,6 +402,19 @@ export function App() {
               connectionStats={connectionStats}
               transfers={transfers}
               isWakeLockActive={isWakeLockActive}
+              requirePin={requirePin}
+              roomPin={roomPin}
+              pendingJoinRequest={pendingJoinRequest}
+              isJoinPending={isJoinPending}
+              pinRequired={pinRequired}
+              pinError={pinError}
+              pinAttemptsRemaining={pinAttemptsRemaining}
+              joinDenied={joinDenied}
+              onApproveJoin={approveJoinRequest}
+              onDenyJoin={denyJoinRequest}
+              onCancelJoin={cancelJoinRequest}
+              onSubmitPin={submitPin}
+              onRetryJoin={retryJoin}
               onFilesSelected={queueFiles}
               onRetryTransfer={retryTransfer}
               onCancelTransfer={cancelTransfer}
@@ -352,11 +424,12 @@ export function App() {
         </ErrorBoundary>
       </main>
 
-      {/* Footer */}
-      <footer className="app-footer">
-        <p>
-          QuickDrop — Temporary Peer-to-Peer Sharing • Zero server file storage • Native WebRTC
-        </p>
+      {/* Modern Product Footer */}
+      <footer className="footer">
+        <div className="footer-container">
+          <span>QuickDrop — Two devices, one link. Direct and relayed file sharing.</span>
+          <span>Files are never stored on the server.</span>
+        </div>
       </footer>
 
       {/* On-Screen Diagnostic Debug Overlay (toggled via ?debug=1) */}
@@ -389,7 +462,7 @@ export function App() {
           <span style={{ fontWeight: 500 }}>New version available</span>
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-secondary btn-reload"
             style={{
               minHeight: '28px',
               padding: '2px 12px',

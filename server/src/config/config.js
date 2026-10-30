@@ -42,4 +42,14 @@ export const config = {
 
   // Security controls
   requireJoinApproval: process.env.REQUIRE_JOIN_APPROVAL === 'true',
+
+  // Relay safety & backpressure limits
+  relayMaxBytesPerRoom: parseInt(process.env.RELAY_MAX_BYTES_PER_ROOM || (2 * 1024 * 1024 * 1024).toString(), 10), // 2 GiB
+  relayMaxBytesPerIpPerDay: parseInt(process.env.RELAY_MAX_BYTES_PER_IP_PER_DAY || (5 * 1024 * 1024 * 1024).toString(), 10), // 5 GiB
+  relayMaxConcurrentRelayRooms: parseInt(process.env.RELAY_MAX_CONCURRENT_RELAY_ROOMS || '20', 10),
+  relayMaxBufferedAmount: parseInt(process.env.RELAY_MAX_BUFFERED_AMOUNT || (4 * 1024 * 1024).toString(), 10), // 4 MiB
+
+  // Cloudflare Realtime TURN credentials
+  turnKeyId: process.env.TURN_KEY_ID || '',
+  turnApiToken: process.env.TURN_API_TOKEN || '',
 };

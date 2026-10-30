@@ -3,10 +3,11 @@ import { CopyButton } from './CopyButton.jsx';
 import { validateMessageText } from '../utils/validateInput.js';
 import { extractFilesFromClipboard } from '../utils/fileUtils.js';
 import { hapticTap, playSendSound } from '../utils/soundEffects.js';
+import { MessageSquare, Send, Mic, Square, Clock } from 'lucide-react';
 
 /**
- * Modern iOS glassmorphic text sharing interface with iMessage-style bubbles,
- * tactile spring feedback, and ephemeral self-destructing notes.
+ * Modern chat interface with clean message bubbles, timestamps, sticky input,
+ * ephemeral notes, and zero emojis.
  * @param {{
  *   messages: Array<{
  *     id: string,
@@ -17,6 +18,9 @@ import { hapticTap, playSendSound } from '../utils/soundEffects.js';
  *     isMine: boolean
  *   }>,
  *   onSendMessage: (text: string) => void,
+ *   onFilesSelected?: (files: FileList | File[]) => void,
+ *   isP2PConnected?: boolean,
+ *   isConnected?: boolean,
  *   disabled?: boolean
  * }} props
  */
@@ -88,7 +92,6 @@ export function TextTransfer({
     }
   };
 
-  // Intercept image pastes in textarea so screenshot pasting works even when input is focused!
   const handleTextareaPaste = (e) => {
     const files = extractFilesFromClipboard(e.clipboardData);
     if (files.length > 0) {
@@ -159,7 +162,6 @@ export function TextTransfer({
     playSendSound();
   };
 
-  // Cancel voice recording without sending
   const cancelVoiceRecording = () => {
     if (!mediaRecorderRef.current) return;
     clearInterval(recordIntervalRef.current);
@@ -176,30 +178,54 @@ export function TextTransfer({
 
   const remainingChars = maxLength - inputText.length;
   const isOverLimit = remainingChars < 0;
-
   const visibleMessages = messages.filter((m) => !evaporatedIds.has(m.id));
+
+  // Helper to render text with auto-link detection
+  const renderMessageContent = (text) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+    return parts.map((part, i) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: 'inherit',
+              textDecoration: 'underline',
+              wordBreak: 'break-all'
+            }}
+          >
+            {part}
+          </a>
+        );
+      }
+      return part;
+    });
+  };
 
   return (
     <div
-      className="card text-transfer-card"
+      className="chat-card"
       style={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        padding: '0',
+        background: 'var(--color-bg-surface-1)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
-        background: 'var(--glass-surface-1)',
-        boxShadow: 'var(--glass-shadow)'
+        minHeight: '440px'
       }}
     >
       {/* Header Bar */}
       <div
         style={{
-          padding: '12px 18px',
-          borderBottom: '1px solid var(--glass-border)',
-          background: 'var(--glass-surface-2)',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
+          padding: '14px 18px',
+          borderBottom: '1px solid var(--border-subtle)',
+          background: 'var(--color-bg-surface-2)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -208,45 +234,19 @@ export function TextTransfer({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '1.1rem' }}>💬</span>
-          <span style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
+          <MessageSquare size={16} strokeWidth={1.75} style={{ color: '#6366f1' }} />
+          <span style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
             Messages
           </span>
           <span
             style={{
-              fontSize: '0.72rem',
-              fontWeight: 700,
+              fontSize: 'var(--font-size-xs)',
+              fontWeight: 500,
               padding: '2px 8px',
               borderRadius: 'var(--radius-full)',
-              background: isP2PConnected
-                ? 'var(--color-lime-dim)'
-                : isConnected
-                ? 'rgba(250, 204, 21, 0.12)'
-                : 'rgba(100, 116, 139, 0.2)',
-              color: isP2PConnected
-                ? 'var(--color-lime)'
-                : isConnected
-                ? 'var(--color-warning)'
-                : 'var(--color-text-subtle)',
-              border: `1px solid ${
-                isP2PConnected
-                  ? 'rgba(228, 253, 151, 0.3)'
-                  : isConnected
-                  ? 'rgba(250, 204, 21, 0.25)'
-                  : 'rgba(100, 116, 139, 0.2)'
-              }`
-            }}
-          >
-            {isP2PConnected ? '⚡ P2P Direct' : isConnected ? '🔄 Active (Signaling)' : 'Offline'}
-          </span>
-          <span
-            style={{
-              fontSize: '0.72rem',
-              fontWeight: 700,
-              padding: '2px 7px',
-              borderRadius: 'var(--radius-full)',
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: 'var(--color-text-muted)'
+              background: 'var(--color-bg-surface-3)',
+              color: 'var(--color-text-secondary)',
+              border: '1px solid var(--border-subtle)'
             }}
           >
             {visibleMessages.length}
@@ -255,10 +255,11 @@ export function TextTransfer({
 
         {/* Self-Destructing Timer Selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
-            ⏱ Auto-Delete:
+          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+            <Clock size={12} strokeWidth={1.75} />
+            <span>Auto-delete:</span>
           </span>
-          <div style={{ display: 'flex', gap: '3px' }}>
+          <div style={{ display: 'flex', gap: '4px' }}>
             {[
               { val: 0, label: 'Off' },
               { val: 30, label: '30s' },
@@ -272,13 +273,13 @@ export function TextTransfer({
                   setDestructSec(opt.val);
                 }}
                 style={{
-                  fontSize: '0.7rem',
-                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  fontWeight: 500,
                   padding: '2px 8px',
-                  borderRadius: 'var(--radius-full)',
-                  border: destructSec === opt.val ? '1px solid var(--color-lime)' : '1px solid var(--glass-border)',
-                  background: destructSec === opt.val ? 'var(--color-lime)' : 'transparent',
-                  color: destructSec === opt.val ? 'var(--color-lime-text)' : 'var(--color-text-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  border: destructSec === opt.val ? '1px solid #6366f1' : '1px solid var(--border-subtle)',
+                  background: destructSec === opt.val ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+                  color: destructSec === opt.val ? '#6366f1' : 'var(--color-text-secondary)',
                   cursor: 'pointer'
                 }}
               >
@@ -297,7 +298,7 @@ export function TextTransfer({
           overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: '14px'
+          gap: '12px'
         }}
       >
         {visibleMessages.length === 0 ? (
@@ -306,60 +307,22 @@ export function TextTransfer({
               margin: 'auto',
               textAlign: 'center',
               color: 'var(--color-text-muted)',
-              fontSize: '0.9rem',
-              maxWidth: '340px',
-              padding: '24px 16px'
+              fontSize: 'var(--font-size-sm)',
+              maxWidth: '300px',
+              padding: '24px 16px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '10px'
             }}
           >
-            <div style={{ fontSize: '2.4rem', marginBottom: '8px', filter: 'drop-shadow(0 0 16px rgba(228, 253, 151, 0.35))' }}>
-              💬
-            </div>
-            <p style={{ fontWeight: 800, fontSize: '1.05rem', color: 'var(--color-text-main)', marginBottom: '4px' }}>
-              Direct P2P Chat
+            <MessageSquare size={32} strokeWidth={1.5} style={{ opacity: 0.5 }} />
+            <p style={{ fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
+              No messages yet
             </p>
-            <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', lineHeight: 1.5, marginBottom: '16px' }}>
-              Beamed directly to the peer's device with zero cloud storage.
+            <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.5 }}>
+              Send a quick note or link. Text streams directly peer-to-peer.
             </p>
-
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  hapticTap();
-                  setDestructSec(30);
-                  setInputText('Wi-Fi Password: ');
-                  inputRef.current?.focus();
-                }}
-                className="btn btn-secondary"
-                style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.76rem' }}
-              >
-                🔑 Wi-Fi Pass (30s)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  hapticTap();
-                  setInputText('https://');
-                  inputRef.current?.focus();
-                }}
-                className="btn btn-secondary"
-                style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.76rem' }}
-              >
-                🔗 Link
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  hapticTap();
-                  setInputText('Quick note: ');
-                  inputRef.current?.focus();
-                }}
-                className="btn btn-secondary"
-                style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.76rem' }}
-              >
-                📝 Note
-              </button>
-            </div>
           </div>
         ) : (
           visibleMessages.map((msg) => {
@@ -381,7 +344,6 @@ export function TextTransfer({
             return (
               <div
                 key={msg.id}
-                className="animate-entrance"
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -392,11 +354,10 @@ export function TextTransfer({
               >
                 <div
                   style={{
-                    fontSize: '0.72rem',
-                    fontWeight: 600,
-                    color: 'var(--color-text-subtle)',
-                    marginBottom: '4px',
-                    padding: '0 6px',
+                    fontSize: '0.7rem',
+                    color: 'var(--color-text-muted)',
+                    marginBottom: '3px',
+                    padding: '0 4px',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px'
@@ -404,42 +365,40 @@ export function TextTransfer({
                 >
                   <span>{msg.isMine ? 'You' : msg.deviceName} • {new Date(msg.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   {isEphemeral && (
-                    <span style={{ color: 'var(--color-warning)', fontWeight: 700 }}>
-                      ⏱ {secondsRemaining}s remaining
+                    <span style={{ color: 'var(--color-status-relay)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                      <Clock size={10} strokeWidth={2} />
+                      <span>{secondsRemaining}s</span>
                     </span>
                   )}
                 </div>
 
                 <div
                   style={{
-                    padding: '12px 16px',
-                    borderRadius: msg.isMine ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
-                    backgroundColor: msg.isMine ? 'var(--color-lime)' : 'rgba(45, 62, 44, 0.65)',
-                    color: msg.isMine ? 'var(--color-lime-text)' : 'var(--color-text-main)',
-                    border: isEphemeral
-                      ? '1px solid var(--color-warning)'
-                      : msg.isMine
-                      ? '1px solid rgba(228, 253, 151, 0.6)'
-                      : '1px solid var(--glass-border)',
-                    boxShadow: msg.isMine
-                      ? '0 6px 18px -2px rgba(228, 253, 151, 0.35)'
-                      : 'var(--glass-shadow-sm)',
+                    padding: '10px 14px',
+                    borderRadius: msg.isMine ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                    backgroundColor: msg.isMine ? 'rgba(99, 102, 241, 0.2)' : 'var(--color-bg-surface-2)',
+                    color: 'var(--color-text-primary)',
+                    border: `1px solid ${
+                      isEphemeral
+                        ? 'var(--color-status-relay-border)'
+                        : msg.isMine
+                        ? 'rgba(99, 102, 241, 0.35)'
+                        : 'var(--border-subtle)'
+                    }`,
                     wordBreak: 'break-word',
                     whiteSpace: 'pre-wrap',
-                    position: 'relative',
-                    fontSize: '0.94rem',
-                    lineHeight: 1.5,
-                    backdropFilter: 'blur(12px)',
-                    WebkitBackdropFilter: 'blur(12px)'
+                    fontSize: 'var(--font-size-sm)',
+                    lineHeight: 1.5
                   }}
                 >
-                  {displayText}
-                  <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
+                  <div>{renderMessageContent(displayText)}</div>
+
+                  <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'flex-end' }}>
                     <CopyButton
                       text={displayText}
                       label="Copy"
-                      successLabel="Copied!"
-                      className={msg.isMine ? 'btn-primary' : 'btn-secondary'}
+                      successLabel="Copied"
+                      className="btn-ghost"
                     />
                   </div>
                 </div>
@@ -450,75 +409,48 @@ export function TextTransfer({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Composer */}
+      {/* Sticky Bottom Input Bar */}
       <div
         style={{
-          padding: '12px 16px',
-          borderTop: '1px solid var(--glass-border)',
-          background: 'rgba(15, 22, 14, 0.85)',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
+          padding: '12px 14px',
+          borderTop: '1px solid var(--border-subtle)',
+          background: 'var(--color-bg-surface-2)',
           display: 'flex',
           flexDirection: 'column',
           gap: '8px'
         }}
       >
         {isRecordingVoice ? (
-          /* Live Voice Recording Bar */
-          <div
-            className="animate-entrance"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              padding: '6px 14px',
-              background: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              borderRadius: 'var(--radius-full)'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-status-error)', fontSize: 'var(--font-size-sm)', fontWeight: 600 }}>
               <span
                 style={{
-                  width: '10px',
-                  height: '10px',
+                  width: '8px',
+                  height: '8px',
                   borderRadius: '50%',
-                  background: 'var(--color-danger)',
-                  boxShadow: '0 0 10px rgba(239, 68, 68, 0.8)'
+                  background: 'var(--color-status-error)',
+                  animation: 'pulse 1s infinite'
                 }}
               />
-              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-main)' }}>
-                Recording Memo: {Math.floor(recordSeconds / 60)}:{(recordSeconds % 60).toString().padStart(2, '0')}
-              </span>
+              <span>Recording: {recordSeconds}s</span>
             </div>
-
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                onClick={stopAndSendVoiceRecording}
-                className="btn btn-primary"
-                style={{
-                  minHeight: '34px',
-                  padding: '4px 14px',
-                  fontSize: '0.82rem',
-                  borderRadius: 'var(--radius-full)'
-                }}
-              >
-                ✓ Send Voice
-              </button>
               <button
                 type="button"
                 onClick={cancelVoiceRecording}
                 className="btn btn-secondary"
-                style={{
-                  minHeight: '34px',
-                  padding: '4px 12px',
-                  fontSize: '0.82rem',
-                  borderRadius: 'var(--radius-full)'
-                }}
+                style={{ height: '34px', minHeight: '34px', padding: '0 12px', fontSize: 'var(--font-size-xs)' }}
               >
-                ✕ Cancel
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={stopAndSendVoiceRecording}
+                className="btn btn-primary"
+                style={{ height: '34px', minHeight: '34px', padding: '0 12px', fontSize: 'var(--font-size-xs)' }}
+              >
+                <Square size={13} strokeWidth={2} />
+                <span>Send Memo</span>
               </button>
             </div>
           </div>
@@ -526,54 +458,38 @@ export function TextTransfer({
           <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
             <textarea
               ref={inputRef}
-              rows={1}
               value={inputText}
-              onChange={(e) => {
-                setInputText(e.target.value);
-                e.target.style.height = '44px';
-                if (e.target.scrollHeight > 44) {
-                  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-                  e.target.style.overflowY = 'auto';
-                  e.target.style.borderRadius = 'var(--radius-md)';
-                } else {
-                  e.target.style.overflowY = 'hidden';
-                  e.target.style.borderRadius = 'var(--radius-full)';
-                }
-              }}
+              onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handleTextareaPaste}
-              placeholder={
-                disabled
-                  ? 'Room ended'
-                  : destructSec > 0
-                  ? `Self-destruct note (${destructSec}s)...`
-                  : 'Type a message or drop links...'
-              }
               disabled={disabled}
-              className="chat-composer-textarea"
+              placeholder={disabled ? 'Room terminated' : 'Type a message... (Enter to send)'}
+              rows={2}
+              style={{
+                flex: 1,
+                resize: 'none',
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--color-bg-surface-1)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--color-text-primary)',
+                fontFamily: 'inherit',
+                fontSize: 'var(--font-size-sm)',
+                lineHeight: 1.4,
+                outline: 'none'
+              }}
             />
 
-            {/* Voice Note Button */}
             <button
               type="button"
               onClick={startVoiceRecording}
+              className="btn-icon"
               disabled={disabled}
-              className="btn btn-secondary"
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius: 'var(--radius-full)',
-                padding: '0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '1.15rem',
-                flexShrink: 0
-              }}
-              title="Record and beam a voice note"
-              aria-label="Record voice note"
+              title="Record voice memo"
+              aria-label="Record voice memo"
+              style={{ height: '40px', minHeight: '40px', width: '40px', minWidth: '40px' }}
             >
-              🎙️
+              <Mic size={16} strokeWidth={1.75} />
             </button>
 
             <button
@@ -581,45 +497,20 @@ export function TextTransfer({
               onClick={handleSend}
               disabled={disabled || !inputText.trim() || isOverLimit}
               className="btn btn-primary"
-              style={{
-                minWidth: '72px',
-                height: '44px',
-                borderRadius: 'var(--radius-full)',
-                padding: '0 18px',
-                fontSize: '0.88rem',
-                flexShrink: 0
-              }}
+              style={{ height: '40px', minHeight: '40px', padding: '0 14px' }}
+              title="Send message"
+              aria-label="Send message"
             >
-              Send
+              <Send size={15} strokeWidth={2} />
             </button>
           </div>
         )}
 
-        {/* Footer Hint Bar */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            fontSize: '0.72rem',
-            color: 'var(--color-text-subtle)',
-            padding: '2px 8px 0',
-            minHeight: '16px'
-          }}
-        >
-          <span>Enter ↵ to send • Shift+Enter for newline</span>
-          {inputText.length > 0 && (
-            <span
-              style={{
-                color: isOverLimit ? 'var(--color-danger)' : 'var(--color-text-subtle)',
-                fontFamily: 'var(--font-mono)',
-                fontWeight: 600
-              }}
-            >
-              {inputText.length} / {maxLength}
-            </span>
-          )}
-        </div>
+        {isOverLimit && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-status-error)' }}>
+            Message exceeds limit by {Math.abs(remainingChars)} characters.
+          </div>
+        )}
       </div>
     </div>
   );

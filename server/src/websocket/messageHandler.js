@@ -1,6 +1,7 @@
 import { config } from '../config/config.js';
-import { getIceServers } from '../config/iceServers.js';
+import { getIceServers, getIceServersAsync } from '../config/iceServers.js';
 import { defaultRateLimiter } from '../security/rateLimiter.js';
+import { defaultRelayLimiter } from './relayLimiter.js';
 import {
   ErrorCodes,
   parseAndValidateRawMessage,
@@ -8,7 +9,10 @@ import {
   validateJoinRoom,
   validateRejoinRoom,
   validateTextMessage,
-  validateRtcMessage
+  validateRtcMessage,
+  validateJoinApprove,
+  validateJoinDeny,
+  validateCancelJoin
 } from './messageSchemas.js';
 
 /**
@@ -85,7 +89,7 @@ export function sendPeerUnavailable(ws, message) {
  * @param {boolean} isBinary
  * @param {string} clientIp
  */
-export function handleIncomingMessage(roomManager, ws, rawData, isBinary, clientIp) {
+export async function handleIncomingMessage(roomManager, ws, rawData, isBinary, clientIp) {
   // 0. High-performance binary file chunk streaming relay between room peers (zero disk storage)
   if (isBinary) {
     const chunkLength = Buffer.isBuffer(rawData) ? rawData.length : rawData.byteLength || 0;
@@ -135,31 +139,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     }
 
     const otherPeer = roomManager.getOtherPeer(roomId, peerId);
-    if (otherPeer && otherPeer.ws && otherPeer.ws.readyState === 1 /* OPEN */) {
-      try {
-        otherPeer.ws.send(rawData, { binary: true });
-        roomManager.touchActivity(roomId, true);
-        logServerMessage({
-          roomId,
-          role,
-          type: 'binary:chunk',
-          isBinary: true,
-          size: chunkLength,
-          outcome: 'relayed',
-          reason: `forwarded_to_${otherPeer.role}`
-        });
-      } catch (err) {
-        logServerMessage({
-          roomId,
-          role,
-          type: 'binary:chunk',
-          isBinary: true,
-          size: chunkLength,
-          outcome: 'rejected',
-          reason: `socket_send_error: ${err.message}`
-        });
-      }
-    } else {
+    if (!otherPeer || !otherPeer.ws || otherPeer.ws.readyState !== 1 /* OPEN */) {
       logServerMessage({
         roomId,
         role,
@@ -170,6 +150,63 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         reason: 'remote_peer_socket_not_open'
       });
       sendPeerUnavailable(ws, 'Peer unavailable: remote peer socket is closed or reconnecting');
+      return;
+    }
+
+    // Server safety & backpressure limits:
+    // Check receiver bufferedAmount, concurrent relay rooms, per-room bytes, and per-IP daily bytes
+    const relayCheck = defaultRelayLimiter.checkRelay({
+      senderWs: ws,
+      receiverWs: otherPeer.ws,
+      roomId,
+      senderPeerId: peerId,
+      clientIp,
+      chunkLength
+    });
+
+    if (!relayCheck.allowed) {
+      logServerMessage({
+        roomId,
+        role,
+        type: 'binary:chunk',
+        isBinary: true,
+        size: chunkLength,
+        outcome: 'rejected',
+        reason: relayCheck.error
+      });
+
+      if (relayCheck.dropOnly) {
+        if (relayCheck.sendPeerSlow) {
+          sendError(ws, ErrorCodes.PEER_SLOW, relayCheck.message);
+        }
+      } else {
+        sendError(ws, relayCheck.error, relayCheck.message);
+      }
+      return;
+    }
+
+    try {
+      otherPeer.ws.send(rawData, { binary: true });
+      roomManager.touchActivity(roomId, true);
+      logServerMessage({
+        roomId,
+        role,
+        type: 'binary:chunk',
+        isBinary: true,
+        size: chunkLength,
+        outcome: 'relayed',
+        reason: `forwarded_to_${otherPeer.role}`
+      });
+    } catch (err) {
+      logServerMessage({
+        roomId,
+        role,
+        type: 'binary:chunk',
+        isBinary: true,
+        size: chunkLength,
+        outcome: 'rejected',
+        reason: `socket_send_error: ${err.message}`
+      });
     }
     return;
   }
@@ -243,8 +280,12 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     }
 
     try {
-      const { roomId, rawJoinToken, ownerPeerId, ownerPeerSecret, expiresAt } = roomManager.createRoom(ws, data.deviceName);
-      const iceServers = getIceServers(ownerPeerId);
+      const { roomId, rawJoinToken, ownerPeerId, ownerPeerSecret, expiresAt, requirePin, pin } = await roomManager.createRoom(
+        ws,
+        data.deviceName,
+        { requirePin: data.requirePin, pin: data.pin, autoApprove: data.autoApprove }
+      );
+      const iceServers = await getIceServersAsync(ownerPeerId);
 
       logServerMessage({
         roomId,
@@ -264,7 +305,9 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         peerSecret: ownerPeerSecret,
         joinToken: rawJoinToken,
         expiresAt,
-        iceServers
+        iceServers,
+        requirePin,
+        ...(requirePin && pin ? { pin } : {})
       });
     } catch (err) {
       logServerMessage({
@@ -284,7 +327,8 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
 
   // 2. JOIN ROOM
   if (type === 'room:join' || (type === 'room' && data.roomId)) {
-    if (!defaultRateLimiter.isAllowed(clientIp, 'room_join', config.rateLimitMaxJoins, config.rateLimitWindowMs)) {
+    if (!defaultRateLimiter.isAllowed(clientIp, 'room_join', config.rateLimitMaxJoins, config.rateLimitWindowMs) ||
+        (data.roomId && !defaultRateLimiter.isAllowed(data.roomId, 'room_join_requests', 20, 60000))) {
       logServerMessage({
         roomId: data.roomId || 'none',
         role: 'unbound',
@@ -295,6 +339,19 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         reason: 'room_join_rate_limit_exceeded'
       });
       return sendError(ws, ErrorCodes.RATE_LIMITED, 'Room join rate limit exceeded. Please wait a moment.');
+    }
+
+    if (data.pin && !defaultRateLimiter.isAllowed(clientIp, 'room_pin_attempts', 10, 60000)) {
+      logServerMessage({
+        roomId: data.roomId || 'none',
+        role: 'unbound',
+        type: 'room:join',
+        isBinary: false,
+        size: msgSize,
+        outcome: 'rate-limited',
+        reason: 'pin_attempt_rate_limit_exceeded'
+      });
+      return sendError(ws, ErrorCodes.RATE_LIMITED, 'Too many PIN attempts. Please wait a moment.');
     }
 
     const schemaError = validateJoinRoom(data);
@@ -312,17 +369,55 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     }
 
     try {
-      const { joinerPeerId, joinerPeerSecret, ownerPeerId, ownerDeviceName } = roomManager.joinRoom(
+      const joinResult = await roomManager.joinRoom(
         data.roomId,
         data.joinToken,
         ws,
-        data.deviceName
+        data.deviceName,
+        {
+          pin: data.pin,
+          userAgent: ws.userAgent,
+          clientIp
+        }
       );
 
+      if (joinResult.status === 'pending') {
+        logServerMessage({
+          roomId: data.roomId,
+          role: 'joiner',
+          type: 'room:join',
+          isBinary: false,
+          size: msgSize,
+          outcome: 'handled',
+          reason: 'join_request_pending_approval'
+        });
+
+        sendJson(ws, {
+          type: 'room:join-pending',
+          version: 1,
+          requestId: joinResult.requestId
+        });
+
+        const room = roomManager.getRoom(data.roomId);
+        const owner = room ? room.members.get(joinResult.ownerPeerId) : null;
+        if (owner && owner.ws) {
+          sendJson(owner.ws, {
+            type: 'peer:join-request',
+            version: 1,
+            requestId: joinResult.requestId,
+            deviceName: joinResult.deviceName,
+            userAgent: joinResult.userAgent
+          });
+        }
+        return;
+      }
+
+      // Admitted immediately (auto-approve was enabled)
+      const { joinerPeerId, joinerPeerSecret, ownerPeerId, ownerDeviceName } = joinResult;
       const room = roomManager.getRoom(data.roomId);
       const joinerMember = room ? room.members.get(joinerPeerId) : null;
       const joinerDeviceName = joinerMember ? joinerMember.deviceName : 'Guest';
-      const iceServers = getIceServers(joinerPeerId);
+      const iceServers = await getIceServersAsync(joinerPeerId);
 
       logServerMessage({
         roomId: data.roomId,
@@ -366,7 +461,129 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         reason: `${err.code || 'JOIN_FAILED'}: ${err.message}`
       });
       const code = err.code || ErrorCodes.INTERNAL_ERROR;
-      sendError(ws, code, err.message);
+      sendJson(ws, {
+        type: 'room:error',
+        version: 1,
+        code,
+        message: err.message,
+        ...(err.attemptsRemaining !== undefined ? { attemptsRemaining: err.attemptsRemaining } : {})
+      });
+    }
+    return;
+  }
+
+  // 2a. HOST APPROVE JOIN
+  if (type === 'peer:join-approve') {
+    const binding = roomManager.getSocketBinding(ws);
+    if (!binding) {
+      return sendError(ws, ErrorCodes.NOT_AUTHORIZED, 'Socket is not in any room');
+    }
+
+    const schemaError = validateJoinApprove(data);
+    if (schemaError) {
+      return sendError(ws, ErrorCodes.INVALID_MESSAGE, schemaError);
+    }
+
+    try {
+      const res = roomManager.approveJoin(binding.roomId, binding.peerId, data.requestId, Boolean(data.autoApprove));
+      const iceServers = await getIceServersAsync(res.joinerPeerId);
+
+      logServerMessage({
+        roomId: binding.roomId,
+        role: 'owner',
+        type: 'peer:join-approve',
+        isBinary: false,
+        size: msgSize,
+        outcome: 'handled',
+        reason: 'join_approved_by_host'
+      });
+
+      sendJson(res.joinerWs, {
+        type: 'room:joined',
+        version: 1,
+        roomId: binding.roomId,
+        peerId: res.joinerPeerId,
+        peerSecret: res.joinerPeerSecret,
+        peerCount: 2,
+        ownerPeerId: res.ownerPeerId,
+        ownerDeviceName: res.ownerDeviceName,
+        iceServers
+      });
+
+      sendJson(ws, {
+        type: 'peer:joined',
+        version: 1,
+        peerId: res.joinerPeerId,
+        deviceName: res.joinerDeviceName
+      });
+    } catch (err) {
+      sendError(ws, err.code || ErrorCodes.INTERNAL_ERROR, err.message);
+    }
+    return;
+  }
+
+  // 2b. HOST DENY JOIN
+  if (type === 'peer:join-deny') {
+    const binding = roomManager.getSocketBinding(ws);
+    if (!binding) {
+      return sendError(ws, ErrorCodes.NOT_AUTHORIZED, 'Socket is not in any room');
+    }
+
+    const schemaError = validateJoinDeny(data);
+    if (schemaError) {
+      return sendError(ws, ErrorCodes.INVALID_MESSAGE, schemaError);
+    }
+
+    try {
+      const res = roomManager.denyJoin(binding.roomId, binding.peerId, data.requestId);
+
+      logServerMessage({
+        roomId: binding.roomId,
+        role: 'owner',
+        type: 'peer:join-deny',
+        isBinary: false,
+        size: msgSize,
+        outcome: 'handled',
+        reason: 'join_denied_by_host'
+      });
+
+      if (res.joinerWs && res.joinerWs.readyState === 1 /* OPEN */) {
+        sendJson(res.joinerWs, {
+          type: 'room:error',
+          version: 1,
+          code: ErrorCodes.JOIN_DENIED,
+          message: 'Join request was denied by the host',
+          attemptsRemaining: res.attemptsRemaining
+        });
+      }
+
+      if (res.isRoomClosed) {
+        sendJson(ws, {
+          type: 'room:closed',
+          version: 1,
+          reason: 'too_many_attempts'
+        });
+      }
+    } catch (err) {
+      sendError(ws, err.code || ErrorCodes.INTERNAL_ERROR, err.message);
+    }
+    return;
+  }
+
+  // 2c. CANCEL PENDING JOIN
+  if (type === 'room:cancel-join') {
+    const schemaError = validateCancelJoin(data);
+    if (schemaError) {
+      return sendError(ws, ErrorCodes.INVALID_MESSAGE, schemaError);
+    }
+
+    const res = roomManager.cancelPendingJoin(data.roomId, data.requestId, ws);
+    if (res && res.ownerWs && res.ownerWs.readyState === 1 /* OPEN */) {
+      sendJson(res.ownerWs, {
+        type: 'peer:join-canceled',
+        version: 1,
+        requestId: res.requestId
+      });
     }
     return;
   }
@@ -409,7 +626,7 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
         data.deviceName
       );
 
-      const iceServers = getIceServers(peerId);
+      const iceServers = await getIceServersAsync(peerId);
 
       logServerMessage({
         roomId: room.roomId,
@@ -669,8 +886,8 @@ export function handleIncomingMessage(roomManager, ws, rawData, isBinary, client
     return;
   }
 
-  // 4b. FILE TRANSFER PROTOCOL RELAY (file:start, file:ready, file:complete, file:cancel)
-  if (type === 'file:start' || type === 'file:ready' || type === 'file:complete' || type === 'file:cancel') {
+  // 4b. FILE TRANSFER PROTOCOL RELAY (file:start, file:ready, file:complete, file:cancel, file:ack)
+  if (type === 'file:start' || type === 'file:ready' || type === 'file:complete' || type === 'file:cancel' || type === 'file:ack') {
     if (room.status !== 'connected') {
       logServerMessage({
         roomId,
